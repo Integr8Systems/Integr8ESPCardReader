@@ -10,9 +10,17 @@ bool ensureFile(const char* name, uint32_t bytes) {
   File f = LittleFS.open(name, "r+");
   if (!f) f = LittleFS.open(name, "w+");
   if (!f) return false;
-  // Reserve fixed addressable slots; zero-fill in bounded chunks only on first creation.
+  // LittleFS files are not sparse. Extend sequentially; do not seek beyond EOF.
   if (f.size() < bytes) {
-    if (!f.seek(bytes - 1, SeekSet) || f.write(uint8_t(0)) != 1) { f.close(); return false; }
+    uint32_t remaining = bytes - f.size();
+    if (!f.seek(f.size(), SeekSet)) { f.close(); return false; }
+    uint8_t zeros[512] = {};
+    while (remaining) {
+      size_t count = std::min<uint32_t>(remaining, sizeof(zeros));
+      if (f.write(zeros, count) != count) { f.close(); return false; }
+      remaining -= count;
+      delay(0);
+    }
     f.flush();
   }
   bool ok = f.size() == bytes;
