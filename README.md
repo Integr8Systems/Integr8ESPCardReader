@@ -40,6 +40,6 @@ MQTT QoS or broker PUBACK is **not** sufficient to delete queued transactions; o
 
 The ESP32-S3 includes Bluetooth 5 LE. An Integr8 BLE provisioning app is planned to set MQTT broker/port/device ID/credentials on-site without reflashing. **Not implemented yet.** See [BLE commissioning design](docs/BLE_PROVISIONING.md).
 
-For compiler package errors such as missing standard `stdint.h`, see [Windows build troubleshooting](docs/TROUBLESHOOTING.md).
+For missing `stdint.h` or large-scale `collect2.exe` linker failures, see [Windows build troubleshooting](docs/TROUBLESHOOTING.md).
 
 Date conversion: `include/UtcEpoch.h` provides validated, timezone-independent UTC epoch conversion without `timegm()`. Host test: `tests/utc_epoch_host_test.cpp`.

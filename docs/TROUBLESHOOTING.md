@@ -46,14 +46,16 @@ https://community.platformio.org/t/im-unable-to-compile/41276
 
 ## Board summary says '8MB Flash, No PSRAM'
 
-The current `board = esp32-s3-devkitc-1` is a **generic board profile**
-whose default display name is an 8MB/no-PSRAM DevKit.
-The actual T-ETH-Elite board has **16MB Flash and 8MB OPI PSRAM**, and
-`platformio.ini` explicitly overrides the build flash size/memory type.
-The printed default board headline therefore does not establish the
-physical memory size. Before production use, confirm upload image header,
-partition table, actual Flash size and PSRAM detection on the physical board.
-Do not change partition schemes casually because it can destroy records.
+The old generic `esp32-s3-devkitc-1` profile displayed 8MB/no PSRAM even
+though T-ETH-Elite hardware actually has **16 MB Flash and 8 MB OPI PSRAM**.
+We now use `board = esp32-s3-devkitc1-n16r8` from the pinned pioarduino
+55.03.39 platform. This board profile explicitly matches the physical
+Flash size and PSRAM type. It corrects board identification; it does NOT
+by itself repair unrelated missing C/C++ linker symbols.
+
+Before field use, check actual Flash size, PSRAM detection and partition
+layout on the hardware. Repartitioning an already commissioned device
+can permanently erase cardholder and transaction data.
 
 Manufacturer:
 https://wiki.lilygo.cc/products/t-eth-series/t-eth-elite/
@@ -75,3 +77,73 @@ git pull origin main
 In VS Code, press PlatformIO **Build**. This fixes this source-level error,
 but the complete ESP32 firmware still requires a successful board build/upload
 and hardware testing.
+
+## Linker failure: `collect2.exe: error: ld returned 1 exit status`
+
+Example of the actual underlying errors in a November 2026 build:
+
+```text
+undefined reference to `__errno'
+undefined reference to `time'
+undefined reference to `puts'
+undefined reference to `operator delete(void*, unsigned int)'
+undefined reference to `__gxx_personality_v0'
+```
+
+These are missing **C/C++ runtime symbols across the Arduino core and
+precompiled ESP-IDF libraries**, not undefined functions from our application.
+They indicate the runtime archives weren't resolved at link time. Possible
+causes: an incomplete/corrupted toolchain or framework-libs installation, an
+incompatible package set, or a linker command assembled with missing library
+arguments. Do not add dummy replacements for `__errno`, `time`, etc.
+
+### Step 1: pull profile correction and clean/rebuild
+
+```powershell
+cd C:\workspace\Integr8ESPCardReader
+git pull origin main
+& "$env:USERPROFILE\.platformio\penv\Scripts\platformio.exe" run -e t_eth_elite -t clean
+& "$env:USERPROFILE\.platformio\penv\Scripts\platformio.exe" run -e t_eth_elite
+```
+
+The PlatformIO summary should now identify `N16R8` (16 MB Flash, 8 MB
+PSRAM). The board correction is independent of the linker fix.
+
+### Step 2: rebuild with a fresh set of downloaded runtime packages (only if needed)
+
+The earlier `stdint.h` failure was repaired by re-downloading the Xtensa
+compiler, but its standard libraries may still be missing or incompatible
+with a cached framework-libs package. Close VS Code and all PlatformIO
+processes first, then in PowerShell:
+
+```powershell
+# Run inside the Integr8ESPCardReader repository root.
+Remove-Item -LiteralPath ".pio" -Recurse -Force -ErrorAction SilentlyContinue
+$pkg = Join-Path $env:USERPROFILE ".platformio\packages"
+Remove-Item -LiteralPath (Join-Path $pkg "toolchain-xtensa-esp-elf") -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath (Join-Path $pkg "framework-arduinoespressif32") -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath (Join-Path $pkg "framework-arduinoespressif32-libs") -Recurse -Force -ErrorAction SilentlyContinue
+```
+
+Restart VS Code and Build. PlatformIO will download the packages pinned by
+`platformio.ini` and rebuild its project output. These commands delete
+only generated build data and downloaded dependencies. **They do not delete
+the Git repository source or alter Flash storage on the physical ESP32.**
+Ensure downloads complete and antivirus does not quarantine files.
+
+### Step 3: capture the verbose link command instead of losing console output
+
+If it still fails, save a verbose build log to a file:
+
+```powershell
+& "$env:USERPROFILE\.platformio\penv\Scripts\platformio.exe" run -e t_eth_elite -v *> .\build_verbose.log
+```
+
+Inspect the long `xtensa-esp-elf-g++` link invocation (often in an `@...`
+response file on Windows), which libraries are supplied and whether the
+compiler has its standard libraries available. Attach the `build_verbose.log`
+file rather than scrolling in the VS Code terminal. Do not commit logs
+containing site credentials.
+
+The project has not yet been linked successfully on the target environment.
+Avoid upload or storage provisioning until the complete build succeeds.
