@@ -136,3 +136,8 @@ the ESP32's authenticated passkey. The revised app uses WinRT custom
 settings** actions. Firmware advertising now resumes after failed connections
 and stays available for 10 minutes. Update both the firmware and the Python
 app; see [BLE troubleshooting](docs/BLE_PROVISIONING.md#troubleshooting-unreliable-discovery--pin-pairing-on-windows).
+
+Windows BLE GATT discovery: after PIN pairing, Windows may report
+`Could not get GATT services: Unreachable`. The updated Windows app
+releases the pairing session, rescans and retries GATT without relaxing
+PIN security. See [BLE troubleshooting](docs/BLE_PROVISIONING.md).

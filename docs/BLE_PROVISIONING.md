@@ -169,3 +169,43 @@ app updates must be deployed to benefit from these changes.
 Do not disable MITM, use `Just Works` pairing for production credentials,
 or send passwords via an unauthenticated BLE characteristic just to bypass
 a Windows pairing issue.
+
+## Windows GATT Unreachable after PIN pairing (November 2026)
+
+If `Pair & Test Bluetooth` reports `Could not get GATT services: Unreachable`,
+the exception occurs **after** the WinRT pairing call, when Bleak attempts
+service discovery. It does not by itself mean the PIN was wrong.
+
+The updated Windows app in commit `7a0de1c` explicitly reports the Windows
+pair/bond result, waits briefly for its pairing session to be released,
+re-scans the Bluetooth address before connecting, and retries up to three
+**fresh GATT connections**. It does not retry configuration writes
+because a prior COMMIT may already have saved values and triggered a reboot.
+The app strictly requires the PIN ceremony; it no longer accepts a
+`CONFIRM_ONLY` Just Works fallback.
+
+Recommended test:
+
+```powershell
+git pull origin main
+py -m pip install -U bleak
+py -m pip show bleak
+.\\scripts\\run-ble-setup.ps1
+```
+
+Start the reader's BLE setup mode and watch the serial monitor at 115200.
+Click **Scan**, enter the device PIN, then **Pair & Test Bluetooth**.
+If the same error continues, retain the app console traceback and any
+`[BLE]` serial messages. Note whether Windows says **PAIRED** or
+**ALREADY_PAIRED**, and whether the ESP32 emits connected/disconnected.
+An existing Windows bond may be stale: do not format/erase device NVS or
+flash just to reset it; ask for a controlled bond recovery path.
+
+For diagnosing intermittent discovery, try turning off Bluetooth briefly,
+reopening reader setup mode, and ensuring no other BLE app holds a connection.
+A Windows Add Device listing is not a requirement for this BLE GATT flow.
+
+Bleak's own Windows backend also includes retry handling for transient
+GATT `Unreachable` errors in recent versions. The repository app retries
+fresh scans/connections on top of that; a persistent error still requires
+device-side serial logs and OS/Bluetooth adapter investigation.
