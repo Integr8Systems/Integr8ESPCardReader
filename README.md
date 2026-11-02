@@ -35,3 +35,9 @@ MQTT QoS or broker PUBACK is **not** sufficient to delete queued transactions; o
 7. Card scans currently log known/unknown AssetIDs but do not record access result. Expand transaction format before using as an audit log.
 8. Rework card storage/index RAM budget after profiling heap and PSRAM on the actual hardware.
 9. Switch to properly validated, authenticated MQTT transport, and ensure duplicate commands cannot cause unwanted state changes.
+
+## Future site commissioning
+
+The ESP32-S3 includes Bluetooth 5 LE. An Integr8 BLE provisioning app is planned to set MQTT broker/port/device ID/credentials on-site without reflashing. **Not implemented yet.** See [BLE commissioning design](docs/BLE_PROVISIONING.md).
+
+For compiler package errors such as missing standard `stdint.h`, see [Windows build troubleshooting](docs/TROUBLESHOOTING.md).

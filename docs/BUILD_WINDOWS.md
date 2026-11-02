@@ -49,3 +49,7 @@ Official board documentation: https://wiki.lilygo.cc/products/t-eth-series/t-eth
 - MQTT disconnected: Ethernet link, DHCP, broker address, broker port (default **1889**) and credentials; capture payload as reversed-hex ASCII, not plain JSON.
 - If serial output is blank, check port and monitor speed, press RESET, and verify the board's USB OTG switch mode. USB CDC settings vary by board/core revision.
 - Current code is an integration prototype: test storage crash recovery and MQTT retries, especially after a power loss, before live access-control use.
+
+
+## Compiler installation errors
+If the build stops in the compiler's `stdint.h` header, follow [Windows PlatformIO troubleshooting](TROUBLESHOOTING.md). This is usually a corrupted downloaded toolchain, not a firmware source or library dependency.
