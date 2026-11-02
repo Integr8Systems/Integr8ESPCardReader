@@ -35,6 +35,7 @@ except ImportError as exc:
 SERVICE_UUID = "875d0000-e1a7-4dca-9a63-a18b1122c001"
 WRITE_UUID = "875d0001-e1a7-4dca-9a63-a18b1122c001"
 STATUS_UUID = "875d0002-e1a7-4dca-9a63-a18b1122c001"
+AUTH_UUID = "875d0003-e1a7-4dca-9a63-a18b1122c001"
 MAX_CONFIG_BYTES = 512
 CHUNK_SIZE = 16
 
@@ -177,14 +178,54 @@ async def verify_gatt(address):
     try:
         services = [str(service.uuid).lower() for service in client.services]
         if SERVICE_UUID not in services:
+            raise RuntimeError("Integr8 GATT service was not found.")
+        if AUTH_UUID not in {
+            str(characteristic.uuid).lower()
+            for service in client.services
+            for characteristic in service.characteristics
+        }:
             raise RuntimeError(
-                "Connected, but Integr8 GATT service was not found. "
-                "Windows may have a stale GATT services cache."
+                "The reader firmware does not yet expose the protected "
+                "authentication check. Compile and upload the latest "
+                "Arduino CLI firmware first."
             )
-        data = await client.read_gatt_char(STATUS_UUID, use_cached=False)
-        return bytes(data).decode("ascii", errors="replace")
+        try:
+            value = await client.read_gatt_char(AUTH_UUID, use_cached=False)
+        except Exception as exc:
+            raise RuntimeError(
+                "GATT connected, but the protected read was rejected. "
+                "The Windows bond may lack MITM authenticated encryption "
+                "or may be stale. Use 'Remove Windows Pairing', clear "
+                "reader BLE bonds by holding BOOT for 12 seconds, and "
+                "pair again with the per-device PIN."
+            ) from exc
+        if bytes(value) != b"AUTH_OK":
+            raise RuntimeError("Unexpected authentication proof response.")
+        return "Authenticated encrypted GATT confirmed."
     finally:
         await client.disconnect()
+
+
+async def unpair_reader(address):
+    raw_address = int(address.replace(":", "").replace("-", ""), 16)
+    device = await BluetoothLEDevice.from_bluetooth_address_async(raw_address)
+    if device is None:
+        raise RuntimeError("Windows cannot resolve the reader. Scan again.")
+    try:
+        info = await DeviceInformation.create_from_id_async(device.device_information.id)
+        if not info.pairing.is_paired:
+            return "Windows already reports the reader as unpaired."
+        result = await asyncio.wait_for(info.pairing.unpair_async(), timeout=30)
+        status = str(result.status).lower()
+        if "unpaired" not in status:
+            raise RuntimeError(f"Windows could not remove the Bluetooth pairing: {result.status}")
+        return (
+            "Windows Bluetooth pairing removed. Now hold the reader's "
+            "BOOT button for 12 seconds AFTER normal startup to clear "
+            "its BLE keys, then Scan and pair again."
+        )
+    finally:
+        device.close()
 
 
 async def apply_settings(address, payload):
@@ -194,6 +235,16 @@ async def apply_settings(address, payload):
     try:
         if SERVICE_UUID not in [str(s.uuid).lower() for s in client.services]:
             raise RuntimeError("Integr8 configuration GATT service was not found.")
+        try:
+            authenticated = await client.read_gatt_char(AUTH_UUID, use_cached=False)
+            if bytes(authenticated) != b"AUTH_OK":
+                raise RuntimeError("Authentication proof was incorrect.")
+        except Exception as exc:
+            raise RuntimeError(
+                "Settings not sent: the reader rejected authenticated GATT "
+                "access. Repair the BLE pairing using the bond reset "
+                "procedure in the setup guide."
+            ) from exc
         await client.write_gatt_char(WRITE_UUID, b"\x01", response=True)
         for start in range(0, len(payload), CHUNK_SIZE):
             part = b"\x02" + payload[start:start + CHUNK_SIZE]
@@ -248,6 +299,10 @@ class SetupApp:
         self.pin_entry.pack(fill="x")
         self.pair_button = ttk.Button(frame, text="1. Pair & Test Bluetooth", command=self.pair)
         self.pair_button.pack(fill="x", pady=(7, 4))
+        self.unpair_button = ttk.Button(
+            frame, text="Repair: Remove Windows Pairing", command=self.unpair
+        )
+        self.unpair_button.pack(fill="x", pady=(0, 4))
 
         self.fields = {}
         for title, key, initial in [
@@ -277,7 +332,7 @@ class SetupApp:
 
     def busy_state(self, busy):
         self.busy = busy
-        for control in (self.scan_button, self.pair_button, self.save_button):
+        for control in (self.scan_button, self.pair_button, self.unpair_button, self.save_button):
             control.configure(state="disabled" if busy else "normal")
 
     def launch(self, name, coroutine):
@@ -349,6 +404,24 @@ class SetupApp:
             return f"{result} Integr8 GATT status: {tested}."
         self.launch("Pairing and testing", work)
 
+    def unpair(self):
+        address = self.selected()
+        if not address:
+            return
+        if not messagebox.askokcancel(
+            "Remove Bluetooth pairing",
+            "This removes the selected reader's pairing from Windows only. "
+            "It does not erase any reader settings or transactions. "
+            "Afterward, hold BOOT on the reader for 12 seconds to clear "
+            "its device-side bond, then pair again. Continue?"
+        ):
+            return
+
+        async def work():
+            return await unpair_reader(address)
+
+        self.launch("Removing Windows pairing", work)
+
     def save(self):
         address = self.selected()
         if not address:
@@ -396,7 +469,7 @@ class SetupApp:
                 self.status.set(f"Found {len(value)} Integr8 reader(s).")
             else:
                 self.status.set(value)
-                if action == "Saving settings":
+                if action in ("Saving settings", "Removing Windows pairing"):
                     messagebox.showinfo("Integr8 Reader Setup", value)
         self.root.after(150, self.pump)
 
