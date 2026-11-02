@@ -12,6 +12,7 @@ constexpr uint32_t HEARTBEAT_MS = 30000;
 // a 10 minute on-site setup window. Never reboot with BOOT held down.
 constexpr int BLE_SETUP_BUTTON_GPIO = 0;
 constexpr uint32_t BLE_SETUP_HOLD_MS = 4000;
+constexpr uint32_t BLE_BOND_CLEAR_HOLD_MS = 12000; // physical BOOT, BLE keys only
 constexpr uint32_t BLE_SETUP_WINDOW_MS = 600000; // 10 minutes for Windows PIN pairing
 constexpr uint32_t BLE_REBOOT_DELAY_MS = 6000;
 

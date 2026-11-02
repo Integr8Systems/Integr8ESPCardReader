@@ -11,6 +11,10 @@
 #include <Preferences.h>
 #include <cstring>
 
+#if defined(CONFIG_NIMBLE_ENABLED)
+#include <host/ble_store.h>
+#endif
+
 // Provisioning v1: authenticated BLE writes, a physical setup window,
 // one NVS blob and an automatic reboot after saving. No secret is returned
 // via a readable BLE characteristic.
@@ -21,6 +25,7 @@ namespace {
 constexpr char SERVICE_UUID[] = "875d0000-e1a7-4dca-9a63-a18b1122c001";
 constexpr char WRITE_UUID[]   = "875d0001-e1a7-4dca-9a63-a18b1122c001";
 constexpr char STATUS_UUID[]  = "875d0002-e1a7-4dca-9a63-a18b1122c001";
+constexpr char AUTH_UUID[]    = "875d0003-e1a7-4dca-9a63-a18b1122c001";
 constexpr size_t MAX_JSON = 512;
 portMUX_TYPE rxMux = portMUX_INITIALIZER_UNLOCKED;
 char receiving[MAX_JSON + 1] = {};
@@ -36,6 +41,7 @@ uint32_t startedAt = 0;
 uint32_t restartAt = 0;
 uint32_t pressAt = 0;
 bool holdTriggered = false;
+bool bondClearTriggered = false;
 BLECharacteristic* statusChar = nullptr;
 
 void status(const char* message) {
@@ -105,6 +111,49 @@ public:
 };
 SetupServerCallbacks serverCallbacks;
 
+class SetupSecurityCallbacks final : public BLESecurityCallbacks {
+public:
+#if defined(CONFIG_NIMBLE_ENABLED)
+  void onAuthenticationComplete(ble_gap_conn_desc* desc) override {
+    if (desc == nullptr) {
+      Serial.println("[BLE] Authentication failed: no connection security descriptor.");
+      return;
+    }
+    Serial.printf("[BLE] Security: encrypted=%u, MITM authenticated=%u, bonded=%u\n",
+                  (unsigned int)desc->sec_state.encrypted,
+                  (unsigned int)desc->sec_state.authenticated,
+                  (unsigned int)desc->sec_state.bonded);
+  }
+#elif defined(CONFIG_BLUEDROID_ENABLED)
+  void onAuthenticationComplete(esp_ble_auth_cmpl_t desc) override {
+    Serial.printf("[BLE] Security: authentication %s, status=%u\n",
+                  desc.success ? "completed" : "FAILED",
+                  (unsigned int)desc.fail_reason);
+  }
+#endif
+};
+SetupSecurityCallbacks securityCallbacks;
+
+// Technician recovery: 12-second BOOT hold removes BLE bonds only.
+// MQTT NVS settings, the persistent PIN and the LittleFS database remain.
+void clearBluetoothBonds() {
+  if (!setupServer || setupServer->getConnectedCount() != 0) {
+    Serial.println("[BLE] Disconnect the PC before clearing BLE pairing keys.");
+    return;
+  }
+#if defined(CONFIG_NIMBLE_ENABLED)
+  const int err = ble_store_clear();
+  Serial.printf("[BLE] Clear Bluetooth pairing keys: %s (code %d).\n",
+                err == 0 ? "OK" : "FAILED", err);
+  if (err == 0) status("READY");
+#elif defined(CONFIG_BLUEDROID_ENABLED)
+  // No destructive NVS erase is attempted on unsupported Bluetooth backends.
+  Serial.println("[BLE] Bond reset on Bluedroid requires platform-specific support.");
+#else
+  Serial.println("[BLE] Bluetooth bond reset not available in this build.");
+#endif
+}
+
 bool initialise() {
   if (bleInitialised) return true;
   const uint32_t pin = setupPin();
@@ -118,9 +167,12 @@ bool initialise() {
 
   if (!BLEDevice::init(String(name))) return false;
   BLEDevice::setMTU(247);
-  BLESecurity::setAuthenticationMode(ESP_LE_AUTH_REQ_SC_MITM_BOND);
-  BLESecurity::setCapability(ESP_IO_CAP_OUT); // PIN is shown to technician over USB serial.
+  // Bool overload also enables the core's security state consistently.
+  // Do NOT relax MITM: MQTT credentials require authenticated encryption.
+  BLESecurity::setCapability(ESP_IO_CAP_OUT); // PIN shown over USB or label.
   BLESecurity::setPassKey(true, pin);
+  BLESecurity::setAuthenticationMode(true, true, true); // bond + MITM + LE SC
+  BLEDevice::setSecurityCallbacks(&securityCallbacks);
 
   BLEServer* server = BLEDevice::createServer();
   setupServer = server;
@@ -140,6 +192,18 @@ bool initialise() {
   writeChar->setCallbacks(&writeCallbacks);
   statusChar = service->createCharacteristic(STATUS_UUID, BLECharacteristic::PROPERTY_READ);
   status("READY");
+
+  // A public READY status does NOT prove the link is authenticated.
+  // Test this characteristic before allowing settings to be sent.
+  uint32_t authReadProperties = BLECharacteristic::PROPERTY_READ;
+#if defined(CONFIG_NIMBLE_ENABLED)
+  authReadProperties |= BLECharacteristic::PROPERTY_READ_AUTHEN;
+#endif
+  BLECharacteristic* authCheck = service->createCharacteristic(AUTH_UUID, authReadProperties);
+#if defined(CONFIG_BLUEDROID_ENABLED)
+  authCheck->setAccessPermissions(ESP_GATT_PERM_READ_ENC_MITM);
+#endif
+  authCheck->setValue(String("AUTH_OK"));
   service->start();
   BLEAdvertising* advertising = BLEDevice::getAdvertising();
   // Put the human-readable name in the *primary* advertisement, so Windows
@@ -218,11 +282,17 @@ void poll() {
   if (!pressed) {
     pressAt = 0;
     holdTriggered = false;
+    bondClearTriggered = false;
   } else {
     if (pressAt == 0) pressAt = now;
     if (!holdTriggered && static_cast<uint32_t>(now - pressAt) >= Config::BLE_SETUP_HOLD_MS) {
       holdTriggered = true;
       start();
+    }
+    if (!bondClearTriggered && static_cast<uint32_t>(now - pressAt) >=
+                               Config::BLE_BOND_CLEAR_HOLD_MS) {
+      bondClearTriggered = true;
+      clearBluetoothBonds();
     }
   }
   if (!active) return;
