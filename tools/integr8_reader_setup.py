@@ -11,6 +11,7 @@ ESP32's encrypted/MITM passkey-required configuration characteristic.
 No MQTT passwords or Bluetooth PINs are written to disk.
 """
 import asyncio
+from importlib.metadata import PackageNotFoundError, version
 import json
 import logging
 import queue
@@ -80,7 +81,8 @@ async def pin_pair(address, pin):
     try:
         info = await DeviceInformation.create_from_id_async(requester.device_information.id)
         if info.pairing.is_paired:
-            return "Reader already paired with Windows."
+            # An existing Windows bond may be stale; GATT must still be tested.
+            return "Windows reports an existing bond (not reauthenticated)."
 
         if not info.pairing.can_pair:
             raise RuntimeError("Windows reports the reader cannot be paired.")
@@ -93,10 +95,6 @@ async def pin_pair(address, pin):
                 if args.pairing_kind == DevicePairingKinds.PROVIDE_PIN:
                     args.accept(pin)
                     observed.append("PIN provided")
-                elif args.pairing_kind == DevicePairingKinds.CONFIRM_ONLY:
-                    # Some Windows stacks ask for a confirmation first.
-                    args.accept()
-                    observed.append("Pairing confirmed")
                 else:
                     observed.append(f"Unsupported pairing ceremony: {args.pairing_kind}")
             except Exception as exc:
@@ -104,7 +102,7 @@ async def pin_pair(address, pin):
 
         token = custom.add_pairing_requested(on_request)
         try:
-            kinds = DevicePairingKinds.PROVIDE_PIN | DevicePairingKinds.CONFIRM_ONLY
+            kinds = DevicePairingKinds.PROVIDE_PIN
             result = await asyncio.wait_for(
                 custom.pair_with_protection_level_async(
                     kinds, DevicePairingProtectionLevel.ENCRYPTION_AND_AUTHENTICATION
@@ -127,38 +125,72 @@ async def pin_pair(address, pin):
         requester.close()
 
 
-async def connect_reader(device):
-    """Use the existing bond instead of Bleak's incompatible pair=True."""
-    client = BleakClient(
-        device, pair=False, timeout=35,
-        winrt={"use_cached_services": False},
-    )
-    await client.connect()
-    return client
-
 
 async def discover_reader(address, timeout=12):
-    """Use a fresh BLEDevice object from this asyncio loop."""
+    """Resolve a fresh BLEDevice rather than reusing a pre-pairing scan object."""
     device = await BleakScanner.find_device_by_address(address, timeout=timeout)
     if device is None:
-        raise RuntimeError("Reader is not advertising now. Hold BOOT for 4 seconds and Scan again.")
+        raise RuntimeError(
+            "Reader is not advertising. Hold BOOT for 4 seconds on the running "
+            "reader to reopen its setup window, then Scan."
+        )
     return device
 
 
-async def verify_gatt(device):
-    client = await connect_reader(device)
+async def connect_reader(address, attempts=3):
+    """Retry transient Windows GATT Unreachable with new BLE sessions and scans."""
+    errors = []
+    for attempt in range(1, attempts + 1):
+        client = None
+        try:
+            if attempt > 1:
+                await asyncio.sleep(min(2.0 * attempt, 6.0))
+            device = await discover_reader(address, timeout=10)
+            logging.info("GATT attempt %d/%d to %s", attempt, attempts, address)
+            client = BleakClient(
+                device, pair=False, timeout=45,
+                winrt={"use_cached_services": False}
+            )
+            await client.connect()
+            if not client.is_connected:
+                raise RuntimeError("Windows did not establish a BLE connection.")
+            logging.info("GATT connected on attempt %d", attempt)
+            return client
+        except Exception as exc:
+            errors.append(f"{attempt}: {type(exc).__name__}: {exc}")
+            logging.warning("GATT attempt %d failed: %s", attempt, exc)
+            if client is not None:
+                try:
+                    await client.disconnect()
+                except Exception:
+                    pass
+    raise RuntimeError(
+        f"Windows GATT unreachable after {attempts} attempts. Last: {errors[-1]}. "
+        "The Windows bond may have succeeded; this is the later service "
+        "discovery step. Check the reader serial log for [BLE] messages, "
+        "close other BLE apps and retry while setup mode is active."
+    )
+
+
+async def verify_gatt(address):
+    client = await connect_reader(address)
     try:
-        services = [str(s.uuid).lower() for s in client.services]
+        services = [str(service.uuid).lower() for service in client.services]
         if SERVICE_UUID not in services:
-            raise RuntimeError("BLE connected, but Integr8 configuration service was not found.")
-        result = await client.read_gatt_char(STATUS_UUID, use_cached=False)
-        return bytes(result).decode("ascii", errors="replace")
+            raise RuntimeError(
+                "Connected, but Integr8 GATT service was not found. "
+                "Windows may have a stale GATT services cache."
+            )
+        data = await client.read_gatt_char(STATUS_UUID, use_cached=False)
+        return bytes(data).decode("ascii", errors="replace")
     finally:
         await client.disconnect()
 
 
-async def apply_settings(device, payload):
-    client = await connect_reader(device)
+async def apply_settings(address, payload):
+    # Retry only the connection, not the BEGIN/DATA/COMMIT operation.
+    # After COMMIT the ESP32 may have saved data and started rebooting.
+    client = await connect_reader(address)
     try:
         if SERVICE_UUID not in [str(s.uuid).lower() for s in client.services]:
             raise RuntimeError("Integr8 configuration GATT service was not found.")
@@ -167,17 +199,18 @@ async def apply_settings(device, payload):
             part = b"\x02" + payload[start:start + CHUNK_SIZE]
             await client.write_gatt_char(WRITE_UUID, part, response=True)
         await client.write_gatt_char(WRITE_UUID, b"\x03", response=True)
-
-        # ATT write response does not imply NVS save completion.
         for _ in range(20):
             await asyncio.sleep(0.25)
-            result = await client.read_gatt_char(STATUS_UUID, use_cached=False)
-            status = bytes(result).decode("ascii", errors="replace")
+            data = await client.read_gatt_char(STATUS_UUID, use_cached=False)
+            status = bytes(data).decode("ascii", errors="replace")
             if status == "SAVED":
-                return "MQTT settings saved to the reader. It will reboot."
+                return "MQTT settings saved to NVS. The reader will reboot."
             if status.startswith("ERROR:"):
-                raise RuntimeError(f"Firmware rejected configuration: {status}")
-        raise TimeoutError("No saved confirmation received. Check the device serial output.")
+                raise RuntimeError("Firmware rejected configuration: " + status)
+        raise TimeoutError(
+            "No SAVED confirmation. Check the device serial log before retrying: "
+            "the device may have saved and restarted already."
+        )
     finally:
         try:
             await client.disconnect()
@@ -232,8 +265,12 @@ class SetupApp:
 
         self.save_button = ttk.Button(frame, text="2. Save MQTT settings to reader", command=self.save)
         self.save_button.pack(fill="x", pady=(13, 2))
+        try:
+            bleak_version = version("bleak")
+        except PackageNotFoundError:
+            bleak_version = "unknown"
         self.status = tk.StringVar(
-            value="Hold BOOT for 4 seconds on a running reader, then Scan."
+            value=f"Bleak {bleak_version}. Hold BOOT for 4 seconds, then Scan."
         )
         ttk.Label(frame, textvariable=self.status, wraplength=480).pack(anchor="w", pady=(9, 0))
         root.after(150, self.pump)
@@ -297,8 +334,19 @@ class SetupApp:
         async def work():
             device = await discover_reader(address)
             result = await pin_pair(device.address, pin)
-            tested = await verify_gatt(device)
-            return f"{result} GATT status: {tested}."
+            self.events.put((
+                "progress", "Pairing and testing",
+                f"{result} Waiting for Windows to release the pairing session...",
+            ))
+            # Close the WinRT pairing object and let the reader advertise again.
+            await asyncio.sleep(2.0)
+            try:
+                tested = await verify_gatt(address)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"{result} GATT service discovery failed afterwards: {exc}"
+                ) from exc
+            return f"{result} Integr8 GATT status: {tested}."
         self.launch("Pairing and testing", work)
 
     def save(self):
@@ -323,8 +371,7 @@ class SetupApp:
             return
 
         async def work():
-            device = await discover_reader(address)
-            return await apply_settings(device, payload)
+            return await apply_settings(address, payload)
         self.launch("Saving settings", work)
 
     def pump(self):
@@ -333,6 +380,9 @@ class SetupApp:
                 kind, action, value = self.events.get_nowait()
             except queue.Empty:
                 break
+            if kind == "progress":
+                self.status.set(value)
+                continue
             self.busy_state(False)
             if kind == "error":
                 self.status.set(action + " failed: " + value)
