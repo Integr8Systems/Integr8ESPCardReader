@@ -40,6 +40,6 @@ MQTT QoS or broker PUBACK is **not** sufficient to delete queued transactions; o
 
 The ESP32-S3 includes Bluetooth 5 LE. An Integr8 BLE provisioning app is planned to set MQTT broker/port/device ID/credentials on-site without reflashing. **Not implemented yet.** See [BLE commissioning design](docs/BLE_PROVISIONING.md).
 
-For missing `stdint.h`, `libm.a` / `libstdc++.a`, or `collect2.exe` linker failures, see [Windows build troubleshooting](docs/TROUBLESHOOTING.md). The project pins a November 2025 Xtensa GCC 14.2.0 package as an unverified workaround for a reproducible January 2026 toolchain link failure.
+For missing `stdint.h`, `libm.a` / `libstdc++.a`, or `collect2.exe` linker failures, see [Windows build troubleshooting](docs/TROUBLESHOOTING.md). The project now pins the complete pioarduino 55.03.37 platform with its matched Arduino 3.3.7 and compiler packages; successful Windows linking is still to be confirmed.
 
 Date conversion: `include/UtcEpoch.h` provides validated, timezone-independent UTC epoch conversion without `timegm()`. Host test: `tests/utc_epoch_host_test.cpp`.

@@ -1,82 +1,98 @@
 # PlatformIO build troubleshooting (Windows)
 
-## Missing compiler runtime libraries at link time (`-lm`, `-lstdc++`)
+## Linker/compiler failures: matched pioarduino toolchain
 
-If all source code compiles but the final link reports:
+### Symptoms
+
+The initial pioarduino 55.03.39 / Arduino ESP32 3.3.9 build compiled the
+firmware, but the link failed:
 
 ```text
-Linking .pio\\build\\t_eth_elite\\firmware.elf
-.../ld.exe: cannot find -lm: No such file or directory
-.../ld.exe: cannot find -lstdc++: No such file or directory
+ld.exe: cannot find -lm: No such file or directory
+ld.exe: cannot find -lstdc++: No such file or directory
 collect2.exe: error: ld returned 1 exit status
 ```
 
-the toolchain cannot locate its **target-side** math library `libm.a` and
-C++ runtime library `libstdc++.a`. This is unrelated to the application,
-the C# MQTT encoding, or a missing PlatformIO `lib_deps` entry.
+A subsequent override of **only** the compiler package introduced a
+different error:
 
-The build used pioarduino `55.03.39` with Xtensa GCC
-`14.2.0+20260121`. Reinstalling the same archives did not resolve the
-user's errors. The project now overrides **only** the Xtensa compiler
-package using the `14.2.0+20251107` archive specified by the official
-pioarduino `55.03.37` platform manifest. The Arduino core remains
-`3.3.9`; the board profile remains `esp32-s3-devkitc1-n16r8`.
-**This is a proposed compatibility workaround, not yet confirmed by a
-successful target build.**
+```text
+'xtensa-esp32s3-elf-g++' is not recognized as an internal or external command
+```
 
-### Run the updated build (Windows PowerShell)
+This indicated that the override package failed to provide/expose the
+expected compiler executable. Its diagnostic command also mistakenly assumed
+the generic prefix `xtensa-esp-elf-g++`, whereas PlatformIO compiles this
+ESP32-S3 target with `xtensa-esp32s3-elf-g++`.
+
+### Repository configuration change
+
+We now pin the **complete pioarduino 55.03.37 platform**, not a single custom
+compiler archive. This platform release includes its matched Arduino 3.3.7
+core, ESP-IDF support libraries and `toolchain-xtensa-esp-elf`
+14.2.0+20251107. The N16R8 16MB Flash / 8MB OPI PSRAM board profile remains
+unchanged.
+
+**This is a candidate fix based on the published matching package versions;
+a complete Windows build and device upload have not yet been verified.**
+
+### Run from Windows PowerShell
 
 ```powershell
 cd C:\workspace\Integr8ESPCardReader
 git pull origin main
+
 & "$env:USERPROFILE\.platformio\penv\Scripts\platformio.exe" run -e t_eth_elite -t clean
 & "$env:USERPROFILE\.platformio\penv\Scripts\platformio.exe" run -e t_eth_elite
 ```
 
-Look for `toolchain-xtensa-esp-elf @ 14.2.0+20251107` in PACKAGES.
-If PlatformIO keeps resolving the previous package, close VS Code and
-remove only that cached package and the `.pio` build folder, then retry:
+The PACKAGES section should report `framework-arduinoespressif32 @ 3.3.7`,
+not 3.3.9. Compiler and support libraries should come from the same platform
+release.
+
+### Correct compiler diagnostic
+
+First locate the actual compiler installed by PlatformIO. Do not assume a
+compiler path until it exists:
 
 ```powershell
-Remove-Item -LiteralPath "$env:USERPROFILE\.platformio\packages\toolchain-xtensa-esp-elf" -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath ".pio" -Recurse -Force -ErrorAction SilentlyContinue
+$bin = Join-Path $env:USERPROFILE ".platformio\packages\toolchain-xtensa-esp-elf\bin"
+Get-ChildItem -LiteralPath $bin -Filter "*g++.exe" | Select-Object Name,FullName
 ```
 
-### Confirm whether the compiler can find its own runtime archives
+For the ESP32-S3, try this **only if the file exists**:
 
 ```powershell
-$compiler = "$env:USERPROFILE\.platformio\packages\toolchain-xtensa-esp-elf\bin\xtensa-esp-elf-g++.exe"
+$compiler = Join-Path $bin "xtensa-esp32s3-elf-g++.exe"
+Test-Path -LiteralPath $compiler
 & $compiler -print-file-name=libm.a
 & $compiler -print-file-name=libstdc++.a
 ```
 
-Each line should be a **full path** ending in the requested `.a` file;
-if it prints only `libm.a` or `libstdc++.a`, the toolchain cannot
-locate that library. In that case inspect the local toolchain install,
-Windows antivirus/quarantine, and the verbose link command rather than
-trying to install an unrelated host Windows C++ redistributable.
+Each `-print-file-name` call should return a full path to the compiler's
+target runtime archive. A bare `libm.a` or `libstdc++.a` means that
+archive was not found. If `Test-Path` returns `False`, inspect the
+`Get-ChildItem` results and package installation; do not run the missing
+executable.
 
-### If the targeted compiler override does not help
+Use each PowerShell command on its own line. `&` is the invocation operator
+at the start of an individual command; it is **not** a shell command
+separator as in some other terminals.
 
-Capture the complete verbose build output:
+### Preserve the entire diagnostic build log
 
 ```powershell
 & "$env:USERPROFILE\.platformio\penv\Scripts\platformio.exe" run -e t_eth_elite -v *> .\build_verbose.log
 ```
 
-Share the resulting `build_verbose.log`; it contains the resolved
-library search paths and the linker invocation. A fallback for further
-investigation is to use the **complete** pioarduino `55.03.37` platform
-with its matched Arduino 3.3.7 packages. Do not arbitrarily add `-lm`
-or `-lstdc++` to `build_flags`: the linker is already requesting
-these libraries, and adding them again does not provide their missing
-archives.
+If the error persists after the complete platform switch, share the log;
+it will show whether compiler discovery and linking are now consistent.
+Do not install unrelated PlatformIO libraries as substitutes for the
+standard C/C++ runtime, and do not flash until the firmware links.
 
-References:
-- pioarduino 55.03.37 platform manifest: https://github.com/pioarduino/platform-espressif32/blob/55.03.37/platform.json
-- pioarduino 55.03.39 platform manifest: https://github.com/pioarduino/platform-espressif32/blob/55.03.39/platform.json
-- PlatformIO custom toolchain overrides: https://docs.platformio.org/en/latest/projectconf/sections/env/options/platform/platform_packages.html
-
+Platform manifests:
+- https://github.com/pioarduino/platform-espressif32/blob/55.03.37/platform.json
+- https://github.com/pioarduino/platform-espressif32/blob/55.03.39/platform.json
 
 ## Error: `fatal error: stdint.h: No such file or directory`
 
@@ -126,8 +142,7 @@ https://community.platformio.org/t/im-unable-to-compile/41276
 
 The old generic `esp32-s3-devkitc-1` profile displayed 8MB/no PSRAM even
 though T-ETH-Elite hardware actually has **16 MB Flash and 8 MB OPI PSRAM**.
-We now use `board = esp32-s3-devkitc1-n16r8` from the pinned pioarduino
-55.03.39 platform. This board profile explicitly matches the physical
+We now use `board = esp32-s3-devkitc1-n16r8` from the pinned pioarduino 55.03.37 platform. This board profile explicitly matches the physical
 Flash size and PSRAM type. It corrects board identification; it does NOT
 by itself repair unrelated missing C/C++ linker symbols.
 
