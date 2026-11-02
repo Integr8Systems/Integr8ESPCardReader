@@ -7,6 +7,7 @@
 #include "config.h"
 #include "storage.h"
 #include "Integr8Wire.h"
+#include "UtcEpoch.h"
 #include <string>
 
 // Encodes every outbound MQTT JSON payload and decodes every inbound payload
@@ -41,35 +42,18 @@ uint64_t jsonU64(JsonVariantConst value) {
   for (char c : s) if (c < '0' || c > '9') return 0;
   return strtoull(s.c_str(), nullptr, 10);
 }
-// Accept server dates as UTC yyyy-MM-dd HH:mm:ss or epoch integer.
-// Always interpret the agreed wire format as UTC, independent of local timezone.
+// Accept date strings from C# as UTC yyyy-MM-dd HH:mm:ss, or epoch seconds.
+// Portable conversion, independent of the host's timezone and libc timegm().
 bool parseUtcEpoch(JsonVariantConst value, uint32_t& result) {
-  if (value.is<uint32_t>()) { result = value.as<uint32_t>(); return true; }
-  String input = value.as<String>();
-  if (input.length() == 0) return false;
-  if (input.length() != 19) {
-    for (char c : input) if (c < '0' || c > '9') return false;
-    unsigned long long n = strtoull(input.c_str(), nullptr, 10);
-    if (n > UINT32_MAX) return false;
-    result = static_cast<uint32_t>(n); return true;
+  if (value.is<uint32_t>()) {
+    result = value.as<uint32_t>();
+    return true;
   }
-  int year, month, day, hour, minute, second;
-  if (sscanf(input.c_str(), "%4d-%2d-%2d %2d:%2d:%2d",
-             &year, &month, &day, &hour, &minute, &second) != 6) return false;
-  if (year < 1970 || year > 2106 || month < 1 || month > 12 || day < 1 ||
-      day > 31 || hour > 23 || minute > 59 || second > 59) return false;
-  struct tm utc = {};
-  utc.tm_year = year - 1900; utc.tm_mon = month - 1; utc.tm_mday = day;
-  utc.tm_hour = hour; utc.tm_min = minute; utc.tm_sec = second;
-  time_t timestamp = timegm(&utc);
-  if (timestamp < 0 || static_cast<uint64_t>(timestamp) > UINT32_MAX) return false;
-  struct tm verified;
-  if (!gmtime_r(&timestamp, &verified) || verified.tm_year != utc.tm_year ||
-      verified.tm_mon != utc.tm_mon || verified.tm_mday != utc.tm_mday ||
-      verified.tm_hour != utc.tm_hour || verified.tm_min != utc.tm_min ||
-      verified.tm_sec != utc.tm_sec) return false;
-  result = static_cast<uint32_t>(timestamp);
-  return true;
+  String input = value.as<String>();
+  if (input.length() == 19) {
+    return Integr8Time::parseUtcDateTime(input.c_str(), input.length(), result);
+  }
+  return Integr8Time::parseEpochDigits(input.c_str(), input.length(), result);
 }
 bool validClock(uint32_t& epoch) {
   time_t now = time(nullptr);

@@ -57,3 +57,21 @@ Do not change partition schemes casually because it can destroy records.
 
 Manufacturer:
 https://wiki.lilygo.cc/products/t-eth-series/t-eth-elite/
+
+## Compiler fix: `timegm` was not declared
+
+Some ESP32 Arduino/newlib toolchains do not expose `timegm()`. The firmware now
+uses a pure, timezone-independent calendar-to-epoch converter in
+`include/UtcEpoch.h`. It supports the C# date format
+`yyyy-MM-dd HH:mm:ss` interpreted as UTC, and optionally epoch strings.
+It validates leap years, invalid dates and the `uint32_t` 2106 cutoff.
+
+Fetch the latest source and build again:
+
+```powershell
+git pull origin main
+```
+
+In VS Code, press PlatformIO **Build**. This fixes this source-level error,
+but the complete ESP32 firmware still requires a successful board build/upload
+and hardware testing.
