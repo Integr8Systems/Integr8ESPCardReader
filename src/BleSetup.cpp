@@ -31,6 +31,7 @@ bool ready = false;
 bool malformed = false;
 bool active = false;
 bool bleInitialised = false;
+BLEServer* setupServer = nullptr;
 uint32_t startedAt = 0;
 uint32_t restartAt = 0;
 uint32_t pressAt = 0;
@@ -90,6 +91,20 @@ public:
 
 WriteCallbacks writeCallbacks;
 
+class SetupServerCallbacks final : public BLEServerCallbacks {
+public:
+  void onConnect(BLEServer* server) override {
+    Serial.println("[BLE] Windows/client connected. Waiting for authenticated PIN pairing.");
+  }
+
+  void onDisconnect(BLEServer* server) override {
+    Serial.println("[BLE] Client disconnected. Advertising resumes while setup remains active.");
+    // BLEServer handles re-advertising automatically while
+    // advertiseOnDisconnect(true) is enabled. The setup timeout disables it.
+  }
+};
+SetupServerCallbacks serverCallbacks;
+
 bool initialise() {
   if (bleInitialised) return true;
   const uint32_t pin = setupPin();
@@ -108,8 +123,10 @@ bool initialise() {
   BLESecurity::setPassKey(true, pin);
 
   BLEServer* server = BLEDevice::createServer();
+  setupServer = server;
+  server->setCallbacks(&serverCallbacks);
 #if !defined(CONFIG_BT_NIMBLE_EXT_ADV) || defined(CONFIG_BLUEDROID_ENABLED)
-  server->advertiseOnDisconnect(false);
+  server->advertiseOnDisconnect(true); // Important: failed pairing must not hide the reader.
 #endif
   BLEService* service = server->createService(SERVICE_UUID);
   uint32_t writeProperties = BLECharacteristic::PROPERTY_WRITE;
@@ -125,8 +142,20 @@ bool initialise() {
   status("READY");
   service->start();
   BLEAdvertising* advertising = BLEDevice::getAdvertising();
-  advertising->addServiceUUID(SERVICE_UUID);
+  // Put the human-readable name in the *primary* advertisement, so Windows
+  // can discover the unit even if a SCAN_RSP packet is missed.
+  BLEAdvertisementData advData;
+  advData.setFlags(ESP_BLE_ADV_FLAG_GEN_DISC | ESP_BLE_ADV_FLAG_BREDR_NOT_SPT);
+  advData.setName(String(name));
+  advertising->setAdvertisementData(advData);
+
+  // Fit the long 128-bit service UUID into the scan response (31-byte limit).
+  BLEAdvertisementData scanData;
+  scanData.setCompleteServices(BLEUUID(SERVICE_UUID));
+  advertising->setScanResponseData(scanData);
   advertising->setScanResponse(true);
+  advertising->setMinInterval(0x50);  // 50ms (units = 0.625ms)
+  advertising->setMaxInterval(0xA0);  // 100ms
   bleInitialised = true;
   Serial.printf("[BLE] Device %s / unique setup PIN %06lu\n", name, (unsigned long)pin);
   Serial.println("[BLE] Keep PIN private and record it on the device label for future service.");
@@ -135,12 +164,16 @@ bool initialise() {
 
 void start() {
   if (!initialise()) return;
-  BLEDevice::startAdvertising();
   startedAt = millis();
   active = true;
+#if !defined(CONFIG_BT_NIMBLE_EXT_ADV) || defined(CONFIG_BLUEDROID_ENABLED)
+  if (setupServer) setupServer->advertiseOnDisconnect(true);
+#endif
+  BLEDevice::startAdvertising();
   restartAt = 0;
   status("READY");
-  Serial.println("[BLE] Secure setup enabled for 180 seconds.");
+  Serial.printf("[BLE] Secure setup enabled for %lu seconds.\n",
+                (unsigned long)(Config::BLE_SETUP_WINDOW_MS / 1000U));
 }
 
 void handleCandidate(const char* json) {
@@ -219,6 +252,9 @@ void poll() {
 
   if (static_cast<uint32_t>(now - startedAt) > Config::BLE_SETUP_WINDOW_MS) {
     active = false;
+#if !defined(CONFIG_BT_NIMBLE_EXT_ADV) || defined(CONFIG_BLUEDROID_ENABLED)
+    if (setupServer) setupServer->advertiseOnDisconnect(false);
+#endif
     BLEDevice::getAdvertising()->stop();
     status("EXPIRED");
     Serial.println("[BLE] Setup window closed.");
