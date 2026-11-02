@@ -1,4 +1,5 @@
 #include "storage.h"
+#include "config.h"
 #include <stddef.h>
 
 namespace {
@@ -29,7 +30,14 @@ bool ensureFile(const char* name, uint32_t bytes) {
 }
 }
 bool Store::begin() {
-  if (!LittleFS.begin(false)) return false; // Never auto-format a live controller.
+  // The partition label is "storage" (see partitions.csv). The library default
+  // is "spiffs", which would silently select the wrong partition.
+  // A new board must be explicitly provisioned once; never wipe existing data
+  // automatically just because a mount failed in the field.
+  if (!LittleFS.begin(false, "/littlefs", 10, "storage")) {
+    if (!Config::ALLOW_FIRST_BOOT_FORMAT ||
+        !LittleFS.begin(true, "/littlefs", 10, "storage")) return false;
+  }
   if (!ensureFile(CARD_FILE, CARD_BYTES) || !ensureFile(TX_FILE, TX_BYTES)) return false;
   rebuildIndex();
   rebuildTransactions();

@@ -6,9 +6,11 @@
 #include <time.h>
 #include "config.h"
 #include "storage.h"
+#include "Integr8Wire.h"
+#include <string>
 
-// IMPORTANT: wire-level payload transform from Integr8Controller must be applied here
-// after confirming its exact implementation. Plain JSON is development-only.
+// Encodes every outbound MQTT JSON payload and decodes every inbound payload
+// using the exact UTF8 -> uppercase HEX -> reverse-chars Integr8 wire format.
 Store store;
 HardwareSerial rfid(1);
 NetworkClient network;
@@ -17,6 +19,21 @@ String topicIn, topicAck, topicOut;
 unsigned long lastConnect = 0, lastPublish = 0;
 String rfidBuffer;
 uint64_t inFlight = 0;
+
+// PubSubClient is limited by its configured packet buffer. Keep a bounded input.
+constexpr size_t MAX_WIRE_MESSAGE = 2048;
+
+bool publishJson(const String& topic, JsonDocument& document) {
+  String json;
+  serializeJson(document, json);
+  std::string wire;
+  if (!Integr8Wire::encode(reinterpret_cast<const uint8_t*>(json.c_str()),
+                           json.length(), wire)) return false;
+  if (wire.size() > MAX_WIRE_MESSAGE) return false;
+  return mqtt.publish(topic.c_str(),
+                      reinterpret_cast<const uint8_t*>(wire.data()),
+                      static_cast<unsigned int>(wire.size()), false);
+}
 
 uint64_t jsonU64(JsonVariantConst value) {
   String s = value.as<String>();
@@ -61,9 +78,17 @@ bool validClock(uint32_t& epoch) {
   return true;
 }
 void onMqtt(char* topic, uint8_t* payload, unsigned int length) {
-  if (length > 1024) return;
+  if (length > MAX_WIRE_MESSAGE) return;
+  std::string json;
+  if (!Integr8Wire::decode(payload, length, json)) {
+    Serial.println("[MQTT] Rejected invalid reversed-hex payload");
+    return;
+  }
   JsonDocument doc;
-  if (deserializeJson(doc, payload, length)) return;
+  if (deserializeJson(doc, json.data(), json.size())) {
+    Serial.println("[MQTT] Rejected malformed JSON payload");
+    return;
+  }
   String t(topic);
   if (t == topicAck) {
     uint64_t seq = jsonU64(doc["Sequence"]);
@@ -95,8 +120,7 @@ void onMqtt(char* topic, uint8_t* payload, unsigned int length) {
   }
   response["Success"] = ok;
   response["CardCount"] = store.cards();
-  String out; serializeJson(response, out);
-  mqtt.publish(topicOut.c_str(), out.c_str(), false);
+  if (!publishJson(topicOut, response)) Serial.println("[MQTT] Card response publish failed");
 }
 void reconnect() {
   if (mqtt.connected() || millis() - lastConnect < Config::MQTT_RETRY_MS) return;
@@ -144,8 +168,7 @@ void sendOldest() {
   doc["Sequence"] = sequence;
   doc["AssetID"] = r.assetId;
   doc["Epoch"] = r.epoch;
-  String payload; serializeJson(doc, payload);
-  if (mqtt.publish(topicOut.c_str(), payload.c_str(), false)) lastPublish = millis();
+  if (publishJson(topicOut, doc)) lastPublish = millis();
 }
 void setup() {
   Serial.begin(115200);
@@ -160,7 +183,7 @@ void setup() {
   topicOut = String("integr8/") + Config::DEVICE_ID + "/send";
   mqtt.setServer(Config::MQTT_HOST, Config::MQTT_PORT);
   mqtt.setCallback(onMqtt);
-  mqtt.setBufferSize(1536);
+  mqtt.setBufferSize(4096);
   configTime(0, 0, "pool.ntp.org", "time.google.com"); // UTC epoch, network required
 }
 void loop() {

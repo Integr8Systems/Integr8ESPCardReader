@@ -2,7 +2,7 @@
 
 LILYGO T-ETH-Elite ESP32-S3 + W5500 Ethernet + UART TTL RFID reader.
 
-**Initial development implementation, not production-ready access-control firmware.** The existing Integr8 controller's reverse/hex MQTT transform has **not** been verified; transport currently uses plain JSON for integration testing only. No door unlock outputs are implemented.
+**Initial development implementation, not production-ready access-control firmware.** MQTT payload encoding now matches the supplied C# reverse/hex character transform (see [protocol](docs/PROTOCOL.md)). Message topic/schema interoperability with the actual server is still to be integrated/tested. No door unlock outputs are implemented.
 
 ## Limits and Flash layout
 - **50,000** fixed-size cardholder records (25 B each = 1,250,000 bytes).
@@ -12,9 +12,9 @@ LILYGO T-ETH-Elite ESP32-S3 + W5500 Ethernet + UART TTL RFID reader.
 - Upon exhaustion of the transaction ring, the oldest slot is overwritten, including a pending record if the network has been offline too long. Lost unacknowledged records must be counted/alerted in a future update.
 
 ## Build
-Install PlatformIO in VS Code, configure `include/config.h`, and build/upload the `t_eth_elite` environment. The UART reader uses GPIO39 RX and optional GPIO42 TX. See [wiring](docs/WIRING.md). Validate the exact board revision and core/library versions before connecting hardware.
+Follow the [Windows build-and-upload walkthrough](docs/BUILD_WINDOWS.md). This is **Arduino framework C++**, built with VS Code + PlatformIO rather than an `.ino` sketch. Configure `include/config.h`, select `t_eth_elite`, and provision the LittleFS partition once on a factory-new board before use. UART reader: GPIO39 RX / optional GPIO42 TX. See [wiring](docs/WIRING.md).
 
-## MQTT development JSON (not yet Integr8 wire-compatible; dates interpreted as UTC)
+## MQTT JSON message bodies (carried as Integr8 reversed-hex ASCII; dates interpreted as UTC)
 - Subscribe: `integr8/<DEVICE_ID>/cards/receive`
 - Subscribe: `integr8/<DEVICE_ID>/transactions/acknowledge`
 - Publish: `integr8/<DEVICE_ID>/send`
@@ -26,7 +26,7 @@ Install PlatformIO in VS Code, configure `include/config.h`, and build/upload th
 MQTT QoS or broker PUBACK is **not** sufficient to delete queued transactions; only the explicit application ACK does that. The same device ID must remain stable across reboots. Transport must be secured before production (broker auth + ACL, protected network and ideally TLS via a tested W5500-capable network stack).
 
 ## Known limitations / next engineering tasks
-1. Adapt exact Integr8 reverse/hex encoding and real MQTT topic/payload conventions using your controller source; no guessed protocol is shipped.
+1. Verify actual Integr8 MQTT topics/message field schema with the deployed server; the byte-level reverse-hex codec now matches the supplied C# code.
 2. Source TTL RFID model and confirm UART framing, supply voltage, GPIO header numbering and whether GPS expansion is attached.
 3. Run hardware build and verify Ethernet API compatibility; not compiled/flashed yet.
 4. **Storage write performance**: current prototype uses LittleFS fixed-position file writes and full scans (including 100k transaction scan per send/ACK). Optimise with in-memory indexes, persistent cursors, batched flushes, erase-aware journalling and crash fault injection before field use.
