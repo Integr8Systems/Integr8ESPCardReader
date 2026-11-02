@@ -1,5 +1,83 @@
 # PlatformIO build troubleshooting (Windows)
 
+## Missing compiler runtime libraries at link time (`-lm`, `-lstdc++`)
+
+If all source code compiles but the final link reports:
+
+```text
+Linking .pio\\build\\t_eth_elite\\firmware.elf
+.../ld.exe: cannot find -lm: No such file or directory
+.../ld.exe: cannot find -lstdc++: No such file or directory
+collect2.exe: error: ld returned 1 exit status
+```
+
+the toolchain cannot locate its **target-side** math library `libm.a` and
+C++ runtime library `libstdc++.a`. This is unrelated to the application,
+the C# MQTT encoding, or a missing PlatformIO `lib_deps` entry.
+
+The build used pioarduino `55.03.39` with Xtensa GCC
+`14.2.0+20260121`. Reinstalling the same archives did not resolve the
+user's errors. The project now overrides **only** the Xtensa compiler
+package using the `14.2.0+20251107` archive specified by the official
+pioarduino `55.03.37` platform manifest. The Arduino core remains
+`3.3.9`; the board profile remains `esp32-s3-devkitc1-n16r8`.
+**This is a proposed compatibility workaround, not yet confirmed by a
+successful target build.**
+
+### Run the updated build (Windows PowerShell)
+
+```powershell
+cd C:\workspace\Integr8ESPCardReader
+git pull origin main
+& "$env:USERPROFILE\.platformio\penv\Scripts\platformio.exe" run -e t_eth_elite -t clean
+& "$env:USERPROFILE\.platformio\penv\Scripts\platformio.exe" run -e t_eth_elite
+```
+
+Look for `toolchain-xtensa-esp-elf @ 14.2.0+20251107` in PACKAGES.
+If PlatformIO keeps resolving the previous package, close VS Code and
+remove only that cached package and the `.pio` build folder, then retry:
+
+```powershell
+Remove-Item -LiteralPath "$env:USERPROFILE\.platformio\packages\toolchain-xtensa-esp-elf" -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath ".pio" -Recurse -Force -ErrorAction SilentlyContinue
+```
+
+### Confirm whether the compiler can find its own runtime archives
+
+```powershell
+$compiler = "$env:USERPROFILE\.platformio\packages\toolchain-xtensa-esp-elf\bin\xtensa-esp-elf-g++.exe"
+& $compiler -print-file-name=libm.a
+& $compiler -print-file-name=libstdc++.a
+```
+
+Each line should be a **full path** ending in the requested `.a` file;
+if it prints only `libm.a` or `libstdc++.a`, the toolchain cannot
+locate that library. In that case inspect the local toolchain install,
+Windows antivirus/quarantine, and the verbose link command rather than
+trying to install an unrelated host Windows C++ redistributable.
+
+### If the targeted compiler override does not help
+
+Capture the complete verbose build output:
+
+```powershell
+& "$env:USERPROFILE\.platformio\penv\Scripts\platformio.exe" run -e t_eth_elite -v *> .\build_verbose.log
+```
+
+Share the resulting `build_verbose.log`; it contains the resolved
+library search paths and the linker invocation. A fallback for further
+investigation is to use the **complete** pioarduino `55.03.37` platform
+with its matched Arduino 3.3.7 packages. Do not arbitrarily add `-lm`
+or `-lstdc++` to `build_flags`: the linker is already requesting
+these libraries, and adding them again does not provide their missing
+archives.
+
+References:
+- pioarduino 55.03.37 platform manifest: https://github.com/pioarduino/platform-espressif32/blob/55.03.37/platform.json
+- pioarduino 55.03.39 platform manifest: https://github.com/pioarduino/platform-espressif32/blob/55.03.39/platform.json
+- PlatformIO custom toolchain overrides: https://docs.platformio.org/en/latest/projectconf/sections/env/options/platform/platform_packages.html
+
+
 ## Error: `fatal error: stdint.h: No such file or directory`
 
 If the log contains:
