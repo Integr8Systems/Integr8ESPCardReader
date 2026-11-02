@@ -53,8 +53,8 @@ bool valid(const Mqtt& value) {
       !boundedText(value.deviceId, sizeof(Stored::deviceId), true) ||
       !boundedText(value.username, sizeof(Stored::username), false) ||
       !boundedText(value.password, sizeof(Stored::password), false)) return false;
-  for (char c : value.host) if (!isHostCharacter(c)) return false;
-  for (char c : value.deviceId) if (!isIdCharacter(c)) return false;
+  for (size_t i = 0; i < value.host.length(); ++i) if (!isHostCharacter(value.host[i])) return false;
+  for (size_t i = 0; i < value.deviceId.length(); ++i) if (!isIdCharacter(value.deviceId[i])) return false;
   return true;
 }
 bool save(const Mqtt& value) {

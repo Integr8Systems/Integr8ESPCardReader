@@ -65,7 +65,7 @@ public:
       case 1: // BEGIN
         rxLength = 0; overflow = false; ready = false; malformed = false;
         break;
-      case 2: // DATA; the browser writes chunks <= 16 bytes
+      case 2: // DATA; client sends chunks <= 16 bytes
         if (count <= 1 || rxLength + count - 1 > MAX_JSON) {
           overflow = true;
         } else if (!overflow && !ready) {

@@ -68,8 +68,7 @@ Check the installation with:
 
 ## 3. Configure the firmware
 
-Edit `include/config.h` for MQTT host/port/user/password, unique device ID,
-UART baud rate and GPIOs. Never commit real site credentials to GitHub.
+For this BLE-enabled revision, MQTT host/port/user/password and device ID are provisioned over Bluetooth and stored in NVS (not hardcoded). Use `include/config.h` only for hardware/timing defaults. See [BLE commissioning](BLE_PROVISIONING.md).
 
 Custom 16 MB flash mapping is defined by the **sketch-root**
 `partitions.csv`; DO NOT move it into `src`. The Espressif Arduino
@@ -166,3 +165,4 @@ References:
 - https://docs.arduino.cc/arduino-cli/commands-reference/arduino-cli_upload
 - https://docs.arduino.cc/arduino-cli/configuration
 - https://github.com/espressif/arduino-esp32/blob/3.3.7/platform.txt
+\n## Configure MQTT after upload over Bluetooth\n\nInstall the lightweight PC dependency once: `py -m pip install bleak`. Then run `py tools/integr8_reader_setup.py` from the repository root. An unconfigured reader advertises as `I8R-XXXXXX` for 180 seconds. On configured readers, hold BOOT for 4 seconds after normal startup to reopen the setup window. Pair using the per-reader PIN printed on the USB serial monitor, enter the site's MQTT details, save, then verify the 30-second MQTT heartbeat after reboot. [Full instructions](BLE_PROVISIONING.md).\n

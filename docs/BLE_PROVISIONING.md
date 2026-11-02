@@ -1,60 +1,121 @@
-# Planned BLE on-site commissioning (design only)
+# Bluetooth (BLE) MQTT commissioning — prototype v1
 
-The LILYGO T-ETH-Elite ESP32-S3 has integrated Bluetooth 5 LE (no Classic Bluetooth).
-BLE provisioning is **not yet implemented in the current firmware**. This document
-records the requirements for a future Integr8 commissioning application.
+This feature is **implemented in firmware**, alongside a lightweight Python
+Windows setup utility; it remains **unverified on the physical LILYGO**.
+Arduino CLI still builds the firmware without any additional BLE libraries:
+the BLE, Preferences and GATT APIs are built into Arduino ESP32 core 3.3.7.
 
-## Goal
+## How configuration works
 
-Use a Windows or Android field app (potentially .NET MAUI, to reuse C# skills)
-to configure the reader at each site without recompiling or uploading firmware.
-BLE operates locally, independently of the site's Ethernet/MQTT connection.
+- MQTT host (DNS name or IPv4 address), port (default 1889), device ID,
+  username and password are stored as one checksummed record in the ESP32
+  **NVS** namespace `i8mqtt`.
+- Values are loaded at boot and used for MQTT subscriptions and publish topics.
+  They survive normal reboots, uploads and loss of Ethernet connectivity.
+- First boot without settings enables BLE setup for **180 seconds**.
+- To reconfigure an already provisioned reader, **hold BOOT (GPIO0) for
+  4 seconds while the firmware is running**, then release. A fresh 180
+  second BLE setup window begins. Do not hold BOOT while resetting: doing
+  so puts an ESP32-S3 into bootloader mode.
+- BLE device advertises as `I8R-XXXXXX`, using the last 6 hex digits
+  of the ESP32's eFuse MAC.
+- The firmware generates a **device-specific persistent 6-digit BLE PIN**
+  at first BLE initialization, writes it to the `i8ble` NVS namespace,
+  and prints it in the USB serial monitor at 115200 baud. Keep it secure;
+  factory technicians should label each device with its unique PIN or use a
+  secure commissioning record.
+- BLE pairing is configured with secure connections, bonding and MITM;
+  write access requires authentication on Bluedroid/NimBLE stacks.
+- Configuration is written in **16-byte fragments** over a write-with-response
+  characteristic, validated in the main Arduino loop, and stored to NVS.
+- After `SAVED` status the device automatically restarts within 6 seconds
+  and connects using the new site settings.
 
-## Initial configuration fields
+**No configuration secrets are included in read/status characteristics.**
+The PIN is not a universal factory default. The byte-level MQTT reverse-hex
+transform is not encryption; use network controls and broker ACLs.
 
-- MQTT hostname / IPv4 address
-- MQTT TCP port (Integr8 default: 1889; configurable)
-- Unique device ID / MQTT client ID
-- MQTT username and password
-- Future options: MQTT TLS trust material, DHCP/static Ethernet settings,
-  time-sync server, reader operating mode
+## Windows setup app
 
-## Proposed commissioning flow
+Requirements: Windows 10/11, Bluetooth LE adapter, Python 3.10+ and the
+lightweight [Bleak](https://bleak.readthedocs.io/) package.
 
-1. Fresh device with no configuration enters a limited provisioning state.
-   An already commissioned device must NOT advertise a configuration GATT
-   service indefinitely. Enter provisioning with a deliberate physical action
-   (use a suitable hardware button after validating board revision/pin access).
-2. The app scans for an `Integr8 Reader` service and shows a stable,
-   non-secret device identifier.
-3. An installer verifies ownership using a per-device one-time activation
-   credential; use authenticated/bonded BLE, not an unauthenticated GATT write.
-4. Installer enters or scans site-specific parameters, sends them in bounded
-   structured messages, and requests validation.
-5. Firmware checks values, persists a candidate configuration, and attempts
-   Ethernet + MQTT connectivity with an explicit test timeout.
-6. On success atomically activate that config in NVS and close provisioning.
-   On failure preserve the previous working config and report the fault.
-7. Reconfiguration later requires an installer-authorised physical action.
-   Audit any provisioning changes where practical.
+From `C:\workspace\Integr8ESPCardReader`:
 
-## Persistence and safety
+```powershell
+py -m pip install bleak
+py tools\integr8_reader_setup.py
+```
 
-- Save small configuration values in ESP32 **NVS**, not in the transaction
-  FIFO or cardholder file. NVS supports wear-levelling and power-loss-safe
-  commit patterns suitable for occasional commissioning changes.
-- Consider encrypted NVS and secure boot/flash encryption for deployed units,
-  including how to provision and recover keys. These need production setup
-  and lifecycle planning.
-- Do not send plaintext MQTT passwords in advertisements, logs or diagnostics.
-  Never rely on reverse-hex MQTT encoding for confidentiality.
-- Preserve transaction and cardholder data when reconfiguring or upgrading.
-- Handle failed settings updates without bricking connectivity.
-- Define a versioned settings schema for future upgrades and migrations.
+Or:
 
-This is an architectural plan only, not a claim that the current firmware
-already supports BLE configuration or secure credential storage.
+```powershell
+.\scripts\run-ble-setup.ps1
+```
 
-References:
-- https://wiki.lilygo.cc/products/t-eth-series/t-eth-elite/
-- https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/api-guides/ble/overview.html
+Windows should prompt for the device's six-digit PIN when pairing.
+The program has **Scan** and **Pair, save MQTT settings and restart reader**
+actions. It does not save credentials or PINs to a file on the laptop.
+
+Pair with the discovered `I8R-XXXXXX` device, enter your MQTT server,
+port, device ID, username and password, then click Save. Wait for `SAVED`.
+A successful BLE save proves local NVS persistence, **not** a successful
+connection to the specified MQTT broker. Check the device's serial console
+or heartbeat messages to verify Ethernet/MQTT connectivity after reboot.
+
+The Windows app requires the exact BLE GATT service declared below;
+changes to the service UUIDs are protocol-breaking.
+
+## BLE GATT application protocol
+
+Service UUID: `875d0000-e1a7-4dca-9a63-a18b1122c001`
+
+Write characteristic (authenticated write with response):
+`875d0001-e1a7-4dca-9a63-a18b1122c001`
+
+Status characteristic (read-only, no secrets):
+`875d0002-e1a7-4dca-9a63-a18b1122c001`
+
+Write messages:
+
+- `0x01`: BEGIN — clears buffered previous configuration
+- `0x02 + 1..16 raw JSON bytes`: DATA fragment
+- `0x03`: COMMIT — validate and persist the collected JSON
+
+Maximum payload JSON size: 512 bytes. Fragments are sequential, and every
+write requires a BLE write response. Example JSON:
+
+```json
+{"host":"192.168.2.100","port":1889,"deviceId":"reader-001","username":"site-reader","password":"example"}
+```
+
+Status values: `READY`, `SAVED`, `EXPIRED`, or `ERROR:JSON`,
+`ERROR:PORT`, `ERROR:VALUES`, `ERROR:NVS`, `ERROR:FRAME`.
+
+Do not use plaintext JSON from this BLE setup service on MQTT. MQTT continues
+to use the existing Integr8 UTF-8/reversed-hex protocol.
+
+## Security and recovery limits
+
+This is **commissioning prototype**, not yet a hardened field interface.
+Pairing behaviour must be validated on actual Windows Bluetooth adapters,
+including re-pairing, bonds, passkey prompts, disconnects, timeouts and errors.
+The PIN is visible to whoever has access to the serial port or device label.
+For production, use authenticated installer credentials and stronger device
+identity/commissioning enrolment, secure boot/flash encryption, encrypted
+NVS or a protected secrets store, plus locked-down broker access.
+
+The v1 firmware **persists then reboots**; it does not first test the
+new broker and automatically roll back if unreachable. An installer can
+recover by reopening the BLE setup window using the BOOT-button hold.
+No NVS erase is required. A future release should test candidates over
+Ethernet, keep the last-good settings and roll back automatically.
+
+Your current 50,000-cardholder LittleFS data and 100,000-transaction
+records are in a separate partition and **are not erased** by an NVS
+configuration change. Avoid any "erase all flash" command.
+
+Board pin use must be verified on the actual board and its expansion:
+GPIO0 is the ESP32 boot strap button, not a dedicated production tamper
+or configuration button. Consider adding a separate protected service
+button before field deployment.

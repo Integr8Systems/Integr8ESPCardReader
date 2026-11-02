@@ -118,7 +118,7 @@ void reconnect() {
     mqtt.subscribe(topicIn.c_str(), 1);
     mqtt.subscribe(topicAck.c_str(), 1);
     inFlight = 0; // Resend oldest pending after reconnect.
-    lastHeartbeat = millis();
+    lastHeartbeat = millis() - Config::HEARTBEAT_MS; // Send first heartbeat promptly after MQTT connection.
     Serial.printf("[MQTT] Connected: %s:%u as %s\n", mqttSettings.host.c_str(), mqttSettings.port, mqttSettings.deviceId.c_str());
   }
 }

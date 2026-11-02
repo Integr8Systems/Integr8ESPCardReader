@@ -35,3 +35,25 @@ Topics and message field names are development conventions pending cross-check w
 IMPORTANT: The server must persist the transaction and deduplicate `(DEVICE_ID, Sequence)` before sending `{"Sequence":"...","Accepted":true}`. MQTT PUBACK alone does not acknowledge a transaction in the local queue. All three topics now carry reversed-hex encoded JSON, not clear JSON.
 
 Dates in upsert payloads use `yyyy-MM-dd HH:mm:ss` interpreted as **UTC** by the current prototype, then stored as 32-bit Unix epoch seconds. Confirm the server timezone convention before production.
+
+## 30-second status heartbeat (development schema)
+
+The ESP32 emits a heartbeat every 30 seconds while connected to MQTT.
+It uses the same encoded payload format as transactions and cardholder
+responses and currently publishes to `integr8/<DEVICE_ID>/send`.
+
+Example decoded JSON:
+
+```json
+{"Command":"Heartbeat","DeviceID":"reader-001","Epoch":1793617200,"UptimeSeconds":62,"IPAddress":"192.168.2.101","Cardholders":250,"PendingTransactions":3,"FreeHeapBytes":118000}
+```
+
+`Epoch` is 0 when the device has not yet synchronized UTC time. Field
+values are illustrative. Heartbeats do not require an application ACK
+and do not advance the oldest pending transaction. They are deliberately
+sent on a separate timer after queue processing.
+
+**Server integration warning:** These topic names and heartbeat field names
+remain a proposed Integr8 ESP schema. Align with the actual server handlers
+before treating them as production telemetry. In particular, the backend
+must distinguish heartbeat messages from transactions.

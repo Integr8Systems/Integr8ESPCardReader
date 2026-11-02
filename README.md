@@ -9,7 +9,7 @@ This repository is itself an Arduino sketch. The main sketch file is
 Arduino C++ implementation is in [src/main.cpp](src/main.cpp) and
 [src/storage.cpp](src/storage.cpp).
 
-> DEVELOPMENT PROTOTYPE. The complete firmware has not yet been compiled on
+> DEVELOPMENT PROTOTYPE. The BLE-enabled revision has not yet been compiled on
 > the official Arduino CLI toolchain or tested on the physical LILYGO board.
 > Do not connect to a live access-controlled door. Storage performance,
 > power-failure recovery, transaction overflow policy and message/topic
@@ -51,8 +51,7 @@ esp32:esp32:esp32s3:FlashSize=16M,PSRAM=opi,PartitionScheme=custom,FlashMode=qio
 ~~~
 
 Arduino ESP32 core **3.3.7**, PubSubClient **2.8.0** and ArduinoJson
-**7.4.3** are the initial tested-against source/API versions. A real Arduino
-CLI board compile and upload are still pending. The sketch-root
+**7.4.3** are the initial tested-against source/API versions. The original Arduino CLI firmware successfully compiled and uploaded on 2026-11-02; the BLE-enabled revision is untested. The sketch-root
 [partitions.csv](partitions.csv) is loaded automatically by Espressif's
 Arduino build recipe. Do not select a default 4 MB partition scheme.
 
@@ -83,9 +82,8 @@ Read [docs/PROTOCOL.md](docs/PROTOCOL.md) and
 
 ## First boot and settings
 
-Edit [include/config.h](include/config.h) for current development-site
-MQTT details. Site-by-site BLE provisioning is a **planned** feature, not
-yet implemented: see [docs/BLE_PROVISIONING.md](docs/BLE_PROVISIONING.md).
+Use the BLE setup utility to provision MQTT per site. [include/config.h](include/config.h)
+now contains non-secret defaults, UART GPIOs and BLE setup timing. Site-by-site BLE provisioning is now implemented as a **hardware-unverified prototype**. See [docs/BLE_PROVISIONING.md](docs/BLE_PROVISIONING.md).
 
 On a **brand-new blank board only**, set
 `Config::ALLOW_FIRST_BOOT_FORMAT` to `true` for the first successful
@@ -123,3 +121,9 @@ transaction record does not include reader, outcome or reason and does not
 drive a relay. MQTT topic names and the server's application ACK contract
 still need testing against the Integr8 backend. The reverse-hex conversion
 is not encryption.
+
+## Site configuration and heartbeat
+
+MQTT host/port/device ID/user/password are now stored in device NVS and set using Bluetooth LE. A prototype Windows setup app is in [tools/integr8_reader_setup.py](tools/integr8_reader_setup.py); install with `py -m pip install bleak` and run with `py tools/integr8_reader_setup.py`. Unconfigured readers advertise automatically for 180 seconds. For an existing reader, hold BOOT for 4 seconds *after normal boot* to enter setup mode. See [BLE setup guide](docs/BLE_PROVISIONING.md).
+
+A **30-second MQTT heartbeat** sends device ID, epoch, uptime, IP address, cardholder count, pending transaction count and free heap. It uses the Integr8 reverse-hex wire encoding and doesn't need an ACK or disrupt FIFO retry. See [MQTT protocol](docs/PROTOCOL.md).
