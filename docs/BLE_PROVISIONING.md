@@ -12,10 +12,10 @@ the BLE, Preferences and GATT APIs are built into Arduino ESP32 core 3.3.7.
   **NVS** namespace `i8mqtt`.
 - Values are loaded at boot and used for MQTT subscriptions and publish topics.
   They survive normal reboots, uploads and loss of Ethernet connectivity.
-- First boot without settings enables BLE setup for **180 seconds**.
+- First boot without settings enables BLE setup for **600 seconds (10 minutes)**.
 - To reconfigure an already provisioned reader, **hold BOOT (GPIO0) for
-  4 seconds while the firmware is running**, then release. A fresh 180
-  second BLE setup window begins. Do not hold BOOT while resetting: doing
+  4 seconds while the firmware is running**, then release. A fresh 600
+  second (10-minute) BLE setup window begins. Do not hold BOOT while resetting: doing
   so puts an ESP32-S3 into bootloader mode.
 - BLE device advertises as `I8R-XXXXXX`, using the last 6 hex digits
   of the ESP32's eFuse MAC.
@@ -53,12 +53,18 @@ Or:
 .\scripts\run-ble-setup.ps1
 ```
 
-Windows should prompt for the device's six-digit PIN when pairing.
-The program has **Scan** and **Pair, save MQTT settings and restart reader**
-actions. It does not save credentials or PINs to a file on the laptop.
+The setup app contains an explicit **Bluetooth pairing PIN** field,
+**Pair & Test Bluetooth**, and **Save MQTT settings** buttons. It uses
+Windows WinRT `DeviceInformationCustomPairing` with `PROVIDE_PIN` and
+requires authenticated encryption, instead of Bleak's default Windows
+`pair=True` path that only supports Just Works. The app pairs before
+connecting to the GATT service. Do not use the normal Windows add-device
+list as the required provisioning workflow. It does not save credentials or PINs to a file on the laptop.
 
-Pair with the discovered `I8R-XXXXXX` device, enter your MQTT server,
-port, device ID, username and password, then click Save. Wait for `SAVED`.
+Scan and select `I8R-XXXXXX`, enter the per-reader PIN from the USB serial
+monitor or label, click **Pair & Test Bluetooth** first, then enter the
+MQTT host/port/ID/username/password and click **Save MQTT settings**.
+Wait for `SAVED`.
 A successful BLE save proves local NVS persistence, **not** a successful
 connection to the specified MQTT broker. Check the device's serial console
 or heartbeat messages to verify Ethernet/MQTT connectivity after reboot.
@@ -119,3 +125,47 @@ Board pin use must be verified on the actual board and its expansion:
 GPIO0 is the ESP32 boot strap button, not a dedicated production tamper
 or configuration button. Consider adding a separate protected service
 button before field deployment.
+
+## Troubleshooting unreliable discovery / PIN pairing on Windows
+
+The original v1 app attempted `BleakClient(..., pair=True)`, which on Windows
+currently uses the Just Works confirmation ceremony. The device requires
+an authenticated six-digit PIN, so that pairing method cannot satisfy the
+reader's BLE security policy. The replacement app uses WinRT's native
+`PROVIDE_PIN` custom-pairing ceremony and requires authenticated encryption.
+
+The original firmware also explicitly set
+`advertiseOnDisconnect(false)`, meaning one failed Windows connection could
+stop all future advertisements until setup was restarted. The updated
+firmware **restarts advertising on disconnect**, places the short device
+name in the primary advertisement (not just the scan response), advertises
+faster, and extends setup to **10 minutes**. Both the firmware and Windows
+app updates must be deployed to benefit from these changes.
+
+1. Pull the latest repository, compile using Arduino CLI and upload the new
+   firmware **without erase-all**. Keep `ALLOW_FIRST_BOOT_FORMAT=false`.
+2. Attach USB and open the 115200 baud serial monitor. Confirm an
+   `[BLE] Device I8R-XXXXXX / unique setup PIN NNNNNN` message appears
+   when BLE setup starts. Preserve the PIN securely; it is device-specific.
+3. If the device has been commissioned previously, hold BOOT for 4 seconds
+   **after normal boot**, then release it. On an unconfigured unit, BLE
+   starts automatically when it boots. The discovery window lasts 10 minutes.
+4. Turn Windows Bluetooth on. Run `py -m pip install -U bleak` once, then
+   launch `py tools\\integr8_reader_setup.py`. Click **Scan**. Select the
+   discovered reader. BLE advertisements may not always appear in Windows
+   Settings > Bluetooth & devices, even while direct BLE scanning works.
+5. Enter the PIN and click **Pair & Test Bluetooth**. Wait for the status
+   message to confirm Windows pairing and GATT connectivity. Only then
+   fill in MQTT settings and click **Save MQTT settings**.
+6. If pairing fails repeatedly, close other Bluetooth tools, remove any
+   old `I8R-XXXXXX` bond from Windows Bluetooth settings **if it appears**,
+   reopen setup mode and try again. A saved ESP32 bond might also be stale;
+   do not erase NVS or all Flash to work around this without a safe
+   key-reset/recovery procedure.
+7. For diagnosis collect the full app error text and USB serial lines
+   containing `[BLE]` and note whether it fails during Scan, Pair, GATT
+   Test or Save.
+
+Do not disable MITM, use `Just Works` pairing for production credentials,
+or send passwords via an unauthenticated BLE characteristic just to bypass
+a Windows pairing issue.

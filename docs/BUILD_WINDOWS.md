@@ -166,3 +166,11 @@ References:
 - https://docs.arduino.cc/arduino-cli/configuration
 - https://github.com/espressif/arduino-esp32/blob/3.3.7/platform.txt
 \n## Configure MQTT after upload over Bluetooth\n\nInstall the lightweight PC dependency once: `py -m pip install bleak`. Then run `py tools/integr8_reader_setup.py` from the repository root. An unconfigured reader advertises as `I8R-XXXXXX` for 180 seconds. On configured readers, hold BOOT for 4 seconds after normal startup to reopen the setup window. Pair using the per-reader PIN printed on the USB serial monitor, enter the site's MQTT details, save, then verify the 30-second MQTT heartbeat after reboot. [Full instructions](BLE_PROVISIONING.md).\n
+## Bluetooth pairing on Windows
+
+The current Windows utility uses WinRT custom PIN pairing (not Bleak's
+Just Works pairing method). Update Bleak using `py -m pip install -U bleak`,
+then run `py tools/integr8_reader_setup.py`. Reopen the reader's ten-minute
+setup window, Scan, select `I8R-XXXXXX`, enter the device's six-digit
+PIN, click **Pair & Test Bluetooth**, and only then use **Save MQTT settings**.
+See [BLE troubleshooting](BLE_PROVISIONING.md#troubleshooting-unreliable-discovery--pin-pairing-on-windows).

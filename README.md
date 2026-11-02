@@ -124,6 +124,15 @@ is not encryption.
 
 ## Site configuration and heartbeat
 
-MQTT host/port/device ID/user/password are now stored in device NVS and set using Bluetooth LE. A prototype Windows setup app is in [tools/integr8_reader_setup.py](tools/integr8_reader_setup.py); install with `py -m pip install bleak` and run with `py tools/integr8_reader_setup.py`. Unconfigured readers advertise automatically for 180 seconds. For an existing reader, hold BOOT for 4 seconds *after normal boot* to enter setup mode. See [BLE setup guide](docs/BLE_PROVISIONING.md).
+MQTT host/port/device ID/user/password are now stored in device NVS and set using Bluetooth LE. A prototype Windows setup app is in [tools/integr8_reader_setup.py](tools/integr8_reader_setup.py); install with `py -m pip install bleak` and run with `py tools/integr8_reader_setup.py`. Unconfigured readers advertise automatically for 10 minutes. For an existing reader, hold BOOT for 4 seconds *after normal boot* to enter setup mode. See [BLE setup guide](docs/BLE_PROVISIONING.md).
 
 A **30-second MQTT heartbeat** sends device ID, epoch, uptime, IP address, cardholder count, pending transaction count and free heap. It uses the Integr8 reverse-hex wire encoding and doesn't need an ACK or disrupt FIFO retry. See [MQTT protocol](docs/PROTOCOL.md).
+
+### Windows BLE pairing fix
+
+The original setup app used Bleak's Windows `pair=True`, which cannot supply
+the ESP32's authenticated passkey. The revised app uses WinRT custom
+`PROVIDE_PIN` pairing and separate **Pair & Test Bluetooth** / **Save MQTT
+settings** actions. Firmware advertising now resumes after failed connections
+and stays available for 10 minutes. Update both the firmware and the Python
+app; see [BLE troubleshooting](docs/BLE_PROVISIONING.md#troubleshooting-unreliable-discovery--pin-pairing-on-windows).
