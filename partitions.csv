@@ -1,0 +1,8 @@
+# 16 MiB total: 2 x 3 MiB OTA apps, 8 MiB LittleFS, 1.9375 MiB reserved for future schedules/features.
+# Name,   Type, SubType, Offset,   Size,    Flags
+nvs,       data, nvs,     0x9000,   0x5000,
+otadata,   data, ota,     0xe000,   0x2000,
+app0,      app,  ota_0,   0x10000,  0x300000,
+app1,      app,  ota_1,   0x310000, 0x300000,
+storage,   data, spiffs,  0x610000, 0x800000,
+future,    data, 0x40,    0xe10000,0x1f0000,
