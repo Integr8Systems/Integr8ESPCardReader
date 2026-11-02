@@ -1,0 +1,21 @@
+# Arduino CLI build output and caches
+.arduino-build/
+.arduino-cache/
+build/
+dist/
+*.bin
+*.elf
+*.map
+
+# Local diagnostic logs and temporary files
+*.log
+*.tmp
+
+# PlatformIO remnants from earlier development
+.pio/
+.pioenvs/
+.piolibdeps/
+
+# Local editor files
+.vscode/
+.idea/

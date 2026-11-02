@@ -1,45 +1,125 @@
-# Integr8 ESP Card Reader (initial firmware)
+# Integr8 ESP Card Reader
 
-LILYGO T-ETH-Elite ESP32-S3 + W5500 Ethernet + UART TTL RFID reader.
+Integr8 standalone ESP32-S3 card reader prototype for **LILYGO T-ETH-Elite**
+(W5500 Ethernet, 16 MB Flash, 8 MB OPI PSRAM) and a TTL UART RFID reader.
 
-**Initial development implementation, not production-ready access-control firmware.** MQTT payload encoding now matches the supplied C# reverse/hex character transform (see [protocol](docs/PROTOCOL.md)). Message topic/schema interoperability with the actual server is still to be integrated/tested. No door unlock outputs are implemented.
+**Build system: official Arduino CLI (no PlatformIO).**
+This repository is itself an Arduino sketch. The main sketch file is
+[Integr8ESPCardReader.ino](Integr8ESPCardReader.ino); the actual readable
+Arduino C++ implementation is in [src/main.cpp](src/main.cpp) and
+[src/storage.cpp](src/storage.cpp).
 
-## Limits and Flash layout
-- **50,000** fixed-size cardholder records (25 B each = 1,250,000 bytes).
-- **100,000** FIFO transaction records (21 B each = 2,100,000 bytes).
-- 16 MiB Flash: dual 3 MiB OTA app slots, 8 MiB LittleFS, 1.9375 MiB partition reserved for future functionality.
-- Transactions include 64-bit monotonic sequence, AssetID, epoch, state, and integrity checksum. Stops at first pending record until **application-level ACK**, retries at 5 second intervals; duplicates must be handled on the server by device ID + sequence.
-- Upon exhaustion of the transaction ring, the oldest slot is overwritten, including a pending record if the network has been offline too long. Lost unacknowledged records must be counted/alerted in a future update.
+> DEVELOPMENT PROTOTYPE. The complete firmware has not yet been compiled on
+> the official Arduino CLI toolchain or tested on the physical LILYGO board.
+> Do not connect to a live access-controlled door. Storage performance,
+> power-failure recovery, transaction overflow policy and message/topic
+> compatibility still require engineering and validation.
 
-## Build
-Follow the [Windows build-and-upload walkthrough](docs/BUILD_WINDOWS.md). This is **Arduino framework C++**, built with VS Code + PlatformIO rather than an `.ino` sketch. Configure `include/config.h`, select `t_eth_elite`, and provision the LittleFS partition once on a factory-new board before use. UART reader: GPIO39 RX / optional GPIO42 TX. See [wiring](docs/WIRING.md).
+## Getting started on Windows (PowerShell)
 
-## MQTT JSON message bodies (carried as Integr8 reversed-hex ASCII; dates interpreted as UTC)
-- Subscribe: `integr8/<DEVICE_ID>/cards/receive`
-- Subscribe: `integr8/<DEVICE_ID>/transactions/acknowledge`
-- Publish: `integr8/<DEVICE_ID>/send`
-- Upsert card command: `{"Command":"CardUpsert","MessageID":"abc","AssetID":123,"CardNumber":"123456789","ValidFrom":"2026-11-01 00:00:00","ValidTo":"2050-01-01 23:59:59","Enabled":true,"Suspended":false,"Blacklisted":false}`
-- Delete card: `{"Command":"CardDelete","MessageID":"abc","AssetID":123}`
-- Transaction: `{"Sequence":"1","AssetID":123,"Epoch":1793617200}`
-- Server ACK (only *after durable server-side transaction commit*): `{"Sequence":"1","Accepted":true}`
+Detailed instructions: **[docs/BUILD_WINDOWS.md](docs/BUILD_WINDOWS.md)**.
 
-MQTT QoS or broker PUBACK is **not** sufficient to delete queued transactions; only the explicit application ACK does that. The same device ID must remain stable across reboots. Transport must be secured before production (broker auth + ACL, protected network and ideally TLS via a tested W5500-capable network stack).
+Prerequisites: install the standalone [Arduino CLI](https://arduino.github.io/arduino-cli/latest/installation/)
+and optionally use a non-system drive for its packages and build cache.
 
-## Known limitations / next engineering tasks
-1. Verify actual Integr8 MQTT topics/message field schema with the deployed server; the byte-level reverse-hex codec now matches the supplied C# code.
-2. Source TTL RFID model and confirm UART framing, supply voltage, GPIO header numbering and whether GPS expansion is attached.
-3. Run hardware build and verify Ethernet API compatibility; not compiled/flashed yet.
-4. **Storage write performance**: current prototype uses LittleFS fixed-position file writes and full scans (including 100k transaction scan per send/ACK). Optimise with in-memory indexes, persistent cursors, batched flushes, erase-aware journalling and crash fault injection before field use.
-5. An interrupted cardholder update can corrupt that individual record; introduce copy-on-write transactions to guarantee update atomicity.
-6. Add UTC clock sync validation, metrics, transaction overflow alerts, replay/idempotency tests, and production key handling.
-7. Card scans currently log known/unknown AssetIDs but do not record access result. Expand transaction format before using as an audit log.
-8. Rework card storage/index RAM budget after profiling heap and PSRAM on the actual hardware.
-9. Switch to properly validated, authenticated MQTT transport, and ensure duplicate commands cannot cause unwanted state changes.
+From the repository root:
 
-## Future site commissioning
+~~~powershell
+# First time only: official ESP32 core and two Arduino libraries
+.\scripts\install-dependencies.ps1
 
-The ESP32-S3 includes Bluetooth 5 LE. An Integr8 BLE provisioning app is planned to set MQTT broker/port/device ID/credentials on-site without reflashing. **Not implemented yet.** See [BLE commissioning design](docs/BLE_PROVISIONING.md).
+# Compile (no USB connection required)
+.\scripts\build.ps1
 
-For missing `stdint.h`, `libm.a` / `libstdc++.a`, or `collect2.exe` linker failures, see [Windows build troubleshooting](docs/TROUBLESHOOTING.md). The project now pins the complete pioarduino 55.03.37 platform with its matched Arduino 3.3.7 and compiler packages; successful Windows linking is still to be confirmed.
+# Identify the COM port, then upload the compiled result
+arduino-cli board list
+.\scripts\upload.ps1 -Port COM5
+~~~
 
-Date conversion: `include/UtcEpoch.h` provides validated, timezone-independent UTC epoch conversion without `timegm()`. Host test: `tests/utc_epoch_host_test.cpp`.
+If Arduino CLI isn't on your PATH, pass its location:
+
+~~~powershell
+.\scripts\install-dependencies.ps1 -Cli "D:\EspTools\arduino-cli.exe"
+.\scripts\build.ps1 -Cli "D:\EspTools\arduino-cli.exe" -BuildPath "D:\EspTools\Build\Integr8ESPCardReader"
+.\scripts\upload.ps1 -Cli "D:\EspTools\arduino-cli.exe" -BuildPath "D:\EspTools\Build\Integr8ESPCardReader" -Port COM5
+~~~
+
+The board FQBN is:
+
+~~~text
+esp32:esp32:esp32s3:FlashSize=16M,PSRAM=opi,PartitionScheme=custom,FlashMode=qio,CDCOnBoot=cdc
+~~~
+
+Arduino ESP32 core **3.3.7**, PubSubClient **2.8.0** and ArduinoJson
+**7.4.3** are the initial tested-against source/API versions. A real Arduino
+CLI board compile and upload are still pending. The sketch-root
+[partitions.csv](partitions.csv) is loaded automatically by Espressif's
+Arduino build recipe. Do not select a default 4 MB partition scheme.
+
+For low disk-space setups, set the Arduino CLI data, download, user and
+build-cache directories to a secondary drive BEFORE installing the core.
+See the Windows guide.
+
+## Firmware scope and limits
+
+- Up to **50,000** cardholders, with AssetID, numeric card number,
+  ValidFrom/ValidTo and enabled/suspended/blacklisted flags.
+- Up to **100,000** transaction records, initially tracking AssetID,
+  epoch and per-device sequence number.
+- Persistent LittleFS cardholder/transaction files in the dedicated 8 MB
+  **storage** partition.
+- Two 3 MB OTA application partitions and about 1.94 MB reserved for future
+  features such as schedules. Reserved space is *not* currently a filesystem.
+- W5500 wired Ethernet and MQTT client (default port **1889**).
+- Integr8 wire transformation matched to supplied C#:
+  UTF-8 JSON -> uppercase hexadecimal -> reverse hex characters.
+- FIFO transaction retransmission: keep sending the earliest unacknowledged
+  record; advance only after an explicit *server application* acknowledgement.
+  The server must deduplicate by unique device ID + transaction sequence.
+- TTL UART RFID: initial ASCII-decimal-line parser, configurable baud rate.
+
+Read [docs/PROTOCOL.md](docs/PROTOCOL.md) and
+[docs/WIRING.md](docs/WIRING.md) for messages and suggested GPIO wiring.
+
+## First boot and settings
+
+Edit [include/config.h](include/config.h) for current development-site
+MQTT details. Site-by-site BLE provisioning is a **planned** feature, not
+yet implemented: see [docs/BLE_PROVISIONING.md](docs/BLE_PROVISIONING.md).
+
+On a **brand-new blank board only**, set
+`Config::ALLOW_FIRST_BOOT_FORMAT` to `true` for the first successful
+boot to initialise the LittleFS partition, then return it to `false` and upload
+again. **Never autoformat a deployed controller to hide a mount failure.**
+An ordinary upload with the same partition map should not erase the data
+partition. Avoid "Erase All Flash", changing partitions or uploading a
+filesystem image on a reader that contains cardholder data.
+
+## Source layout
+
+| File | Purpose |
+| --- | --- |
+| `Integr8ESPCardReader.ino` | Arduino CLI sketch entrypoint |
+| `src/main.cpp` | setup/loop, MQTT, Ethernet and UART RFID |
+| `src/storage.cpp` | Flash cardholder and transaction storage |
+| `include/config.h` | Site configuration (development only) |
+| `include/Integr8Wire.h` | C# compatible reversed-hex codec |
+| `include/UtcEpoch.h` | Validated UTC epoch conversion |
+| `include/storage.h` | Record types and store API |
+| `partitions.csv` | **16 MB custom** flash map |
+| `scripts/*.ps1` | Arduino CLI install, build and upload |
+| `tests/*_host_test.cpp` | Optional host C++ codec/date tests |
+
+## Outstanding engineering work
+
+This is not yet production-ready. In particular: the existing LittleFS
+store uses fixed-position writes and scans up to 100,000 transactions per
+send/ack. The cardholder index requires substantial memory that must be
+validated against actual ESP32 internal heap/PSRAM; metadata wear levelling,
+atomic writes and crash recovery are unfinished. If 100,000 log entries are
+reached, an unacknowledged record can be overwritten; that overflow must
+be prevented or explicitly alerted before field deployment. The current
+transaction record does not include reader, outcome or reason and does not
+drive a relay. MQTT topic names and the server's application ACK contract
+still need testing against the Integr8 backend. The reverse-hex conversion
+is not encryption.

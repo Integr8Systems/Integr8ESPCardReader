@@ -4,10 +4,10 @@
 #include <SPI.h>
 #include <PubSubClient.h>
 #include <time.h>
-#include "config.h"
-#include "storage.h"
-#include "Integr8Wire.h"
-#include "UtcEpoch.h"
+#include "../include/config.h"
+#include "../include/storage.h"
+#include "../include/Integr8Wire.h"
+#include "../include/UtcEpoch.h"
 #include <string>
 
 // Encodes every outbound MQTT JSON payload and decodes every inbound payload

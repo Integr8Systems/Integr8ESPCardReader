@@ -1,5 +1,5 @@
-#include "storage.h"
-#include "config.h"
+#include "../include/storage.h"
+#include "../include/config.h"
 #include <stddef.h>
 
 namespace {

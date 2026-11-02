@@ -1,55 +1,168 @@
-# Build & flash from Windows 10/11 (recommended: VS Code + PlatformIO)
+# Arduino CLI on Windows (LILYGO T-ETH-Elite ESP32-S3)
 
-The code is **Arduino framework C++**: `src/main.cpp` defines the normal `setup()` and `loop()` functions, just like a single `.ino` sketch. PlatformIO compiles the `.cpp` files directly and pulls in the dependencies automatically.
+**No Arduino IDE, Espressif IDE, or PlatformIO required.** The full firmware
+is Arduino-framework C++, kept in separate source files. Arduino CLI compiles
+the root `Integr8ESPCardReader.ino` and recursively compiles `src/*.cpp`.
 
-1. Install [Visual Studio Code](https://code.visualstudio.com/) and [Git for Windows](https://git-scm.com/download/win). Install [Python](https://www.python.org/downloads/) if PlatformIO requests it.
-2. Open VS Code > Extensions (`Ctrl+Shift+X`) > install **PlatformIO IDE** (PlatformIO). Restart VS Code.
-3. Open a VS Code Terminal and run:
-   ```powershell
-   git clone https://github.com/Integr8Systems/Integr8ESPCardReader.git
-   cd Integr8ESPCardReader
-   code .
-   ```
-   (If Git clone is blocked, download the repository ZIP from GitHub and extract it.)
-4. Confirm VS Code opened the **repository root** where `platformio.ini` is visible, not `src` alone. Let PlatformIO download the pinned ESP32 Arduino core and libraries on first build.
-5. Edit `include/config.h`: MQTT broker IP/hostname, port, DEVICE_ID, user/password, RFID baud and GPIOs. Do NOT commit actual production credentials.
-6. **New blank board provisioning:** temporarily set `ALLOW_FIRST_BOOT_FORMAT = true` in `include/config.h`. On a board with existing data, leave it false. The first mount can then format only the dedicated `storage` partition. After successful first boot, set it back to false and upload again.
-7. Connect the T-ETH-Elite via a **data-capable USB-C cable**. Verify that Windows Device Manager shows the board's COM port. No separate Ethernet connection is needed for programming.
-8. Click the PlatformIO **checkmark (Build)** at the bottom of VS Code. Once compilation succeeds click the **right arrow (Upload)**.
-9. Open **PlatformIO: Monitor** at **115200 baud**. A successful start prints the storage counts; connect Ethernet to test MQTT.
-10. If Upload cannot enter bootloader, hold **BOOT**, briefly press **RESET**, release **BOOT**, then start Upload. If necessary set `upload_port = COMx` in `platformio.ini`; lower `upload_speed = 115200` if high-speed transfers fail.
-11. For later firmware uploads, **disable erase-all**: the same partition layout must be retained so cardholder/transaction data remains present. Changing partition layout or flashing a filesystem image can destroy the stored data. Back up before any layout changes.
+## 1. Install CLI and choose a drive
 
-## What's in the project
+Download the standalone Windows Arduino CLI executable:
 
-| Path | Purpose |
-| --- | --- |
-| `platformio.ini` | Selects ESP32-S3 Arduino build, dependency versions and flash options |
-| `partitions.csv` | OTA apps, 8 MiB LittleFS, future reserve |
-| `src/main.cpp` | Arduino `setup()`/`loop()`, Ethernet, RFID and MQTT |
-| `src/storage.cpp`, `include/storage.h` | Cardholder storage and FIFO transaction record store |
-| `include/Integr8Wire.h` | Byte-for-byte Integr8 reverse-hex MQTT codec |
-| `include/config.h` | MQTT, UART, and controlled first-time formatting settings |
-| `docs/PROTOCOL.md` | C# interoperability, topic and acknowledgement details |
-| `docs/WIRING.md` | TTL reader wiring, voltages and GPIO precautions |
+https://arduino.github.io/arduino-cli/latest/installation/
 
-## Arduino IDE versus PlatformIO
+Put the executable in a folder on a drive with sufficient space, for example
+`D:\EspTools\arduino-cli.exe`. **The executable itself is small, but the
+ESP32 board support and prebuilt compiler libraries are much larger**.
 
-Arduino IDE can compile `.cpp` in a sketch's `src` directory, but **this repository is currently organised as a PlatformIO project** and includes a custom partition table that needs careful handling. Do not simply open `src/main.cpp` as an `.ino`; that loses the dependency and partition configuration.
+To keep ALL Arduino CLI packages and caches on D:, start a new PowerShell
+session and set these BEFORE installing any cores or libraries:
 
-If you prefer the Arduino IDE UI, we can organise an Arduino sketch target in a later change. LILYGO's recommended Arduino board selection is **ESP32S3 Dev Module**, Flash **16MB**, PSRAM **OPI**, with **Espressif ESP32 Arduino 3.x** support. The custom 8 MiB partition file must be included in that sketch folder; selecting the Arduino IDE's default partition scheme will change available storage.
+~~~powershell
+$env:ARDUINO_DIRECTORIES_DATA = "D:\EspTools\ArduinoData"
+$env:ARDUINO_DIRECTORIES_DOWNLOADS = "D:\EspTools\Downloads"
+$env:ARDUINO_DIRECTORIES_USER = "D:\EspTools\Sketchbook"
+$env:ARDUINO_BUILD_CACHE_PATH = "D:\EspTools\Cache"
+$env:INTEGR8_BUILD_PATH = "D:\EspTools\Build\Integr8ESPCardReader"
+$env:ARDUINO_CLI = "D:\EspTools\arduino-cli.exe"
+~~~
 
-Official board documentation: https://wiki.lilygo.cc/products/t-eth-series/t-eth-elite/
+These variables apply to the **current** PowerShell session; set them again
+in a new window or configure them persistently. If you already installed
+the core on C:, changing the variables does NOT automatically migrate it.
+Inspect where your existing installation lives using
+`& $env:ARDUINO_CLI config dump`.
 
-## Troubleshooting
+If CLI is installed in PATH you can use `arduino-cli` in place of
+`& $env:ARDUINO_CLI`.
 
-- No COM port: check USB data cable, Windows Device Manager, and BOOT/RESET sequence.
-- Build errors referencing `NetworkClient` or `ETH_PHY_W5500`: use the pinned pioarduino Arduino **3.x** platform in `platformio.ini`, not older Arduino 2.x.
-- `Storage unavailable, halt`: on factory-new board use one-time `ALLOW_FIRST_BOOT_FORMAT=true`, then immediately revert. On a unit containing data, **never** format to hide a mount problem.
-- MQTT disconnected: Ethernet link, DHCP, broker address, broker port (default **1889**) and credentials; capture payload as reversed-hex ASCII, not plain JSON.
-- If serial output is blank, check port and monitor speed, press RESET, and verify the board's USB OTG switch mode. USB CDC settings vary by board/core revision.
-- Current code is an integration prototype: test storage crash recovery and MQTT retries, especially after a power loss, before live access-control use.
+## 2. Install board support and libraries (once)
 
+Open PowerShell in `C:\workspace\Integr8ESPCardReader`.
+Run the provided setup script:
 
-## Compiler installation errors
-If the build stops in the compiler's `stdint.h` header, follow [Windows PlatformIO troubleshooting](TROUBLESHOOTING.md). This is usually a corrupted downloaded toolchain, not a firmware source or library dependency.
+~~~powershell
+.\scripts\install-dependencies.ps1 -Cli $env:ARDUINO_CLI
+~~~
+
+This installs:
+- Official **esp32:esp32@3.3.7** platform from Espressif's Boards Manager
+- **PubSubClient@2.8.0**
+- **ArduinoJson@7.4.3**
+
+The equivalent direct CLI commands are:
+
+~~~powershell
+$index = "https://espressif.github.io/arduino-esp32/package_esp32_index.json"
+& $env:ARDUINO_CLI core update-index --additional-urls $index
+& $env:ARDUINO_CLI core install esp32:esp32@3.3.7 --additional-urls $index
+& $env:ARDUINO_CLI lib install PubSubClient@2.8.0
+& $env:ARDUINO_CLI lib install ArduinoJson@7.4.3
+~~~
+
+Check the installation with:
+
+~~~powershell
+& $env:ARDUINO_CLI core list
+& $env:ARDUINO_CLI lib list
+~~~
+
+## 3. Configure the firmware
+
+Edit `include/config.h` for MQTT host/port/user/password, unique device ID,
+UART baud rate and GPIOs. Never commit real site credentials to GitHub.
+
+Custom 16 MB flash mapping is defined by the **sketch-root**
+`partitions.csv`; DO NOT move it into `src`. The Espressif Arduino
+core's Windows prebuild hook copies this file into the build directory.
+
+## 4. Compile
+
+~~~powershell
+.\scripts\build.ps1 -Cli $env:ARDUINO_CLI
+~~~
+
+Equivalent direct command:
+
+~~~powershell
+$fqbn = "esp32:esp32:esp32s3:FlashSize=16M,PSRAM=opi,PartitionScheme=custom,FlashMode=qio,CDCOnBoot=cdc"
+& $env:ARDUINO_CLI compile --fqbn $fqbn --build-path $env:INTEGR8_BUILD_PATH .
+~~~
+
+Board options:
+- Flash: **16 MB QIO**
+- PSRAM: **8 MB OPI**
+- Partitions: **Custom** (`partitions.csv`)
+- USB CDC on boot: Enabled
+
+If you do not set the build path, `build.ps1` defaults to a
+folder under the Arduino data directory when available, otherwise
+`.arduino-build` in the repository. Set `INTEGR8_BUILD_PATH` or
+pass `-BuildPath` to keep builds off C:.
+
+The final command must complete successfully before uploading. We have
+**not yet verified this project through a real Arduino CLI build**.
+
+## 5. USB upload
+
+Attach the LILYGO board using a **USB data** cable. Identify its COM port:
+
+~~~powershell
+& $env:ARDUINO_CLI board list
+~~~
+
+Then (replace COM5 with the detected port):
+
+~~~powershell
+.\scripts\upload.ps1 -Port COM5 -Cli $env:ARDUINO_CLI
+~~~
+
+Equivalent Arduino CLI command:
+
+~~~powershell
+& $env:ARDUINO_CLI upload --port COM5 --fqbn $fqbn --build-path $env:INTEGR8_BUILD_PATH .
+~~~
+
+The upload command uses the binaries from the compile step; it does NOT
+compile on its own. Do not enable "Erase All Flash" or change the partition
+table on an already commissioned reader.
+
+If the board won't enter upload mode, hold BOOT, press RESET briefly,
+release BOOT, then retry. You may also have to close the serial monitor.
+
+## 6. Serial monitor
+
+~~~powershell
+& $env:ARDUINO_CLI monitor -p COM5 -b esp32:esp32:esp32s3 -c baudrate=115200
+~~~
+
+After programming, the serial output should show storage mount status.
+Initial card and transaction file provisioning will involve substantial
+flash writes and is **not** yet benchmarked. Wire the Ethernet cable and
+verify that W5500 networking and MQTT connect before proceeding to RFID.
+
+If you see "Storage unavailable" on a **factory-new** board, set
+`Config::ALLOW_FIRST_BOOT_FORMAT=true` for initial provisioning,
+upload once, and revert to `false` immediately after success.
+Never format a board with real data to work around a mount failure.
+
+## 7. Source layout and supported framework
+
+The root Arduino sketch is required only to satisfy the Arduino sketch
+layout. Functions `setup()` and `loop()` are deliberately defined in
+`src/main.cpp`, not duplicated in the `.ino` file.
+
+Our C++ sources include the headers from `include/` using
+relative `../include/...` paths. This keeps site settings in their
+original location, avoiding unnecessary local configuration changes.
+
+The official Arduino ESP32 **3.3.7** core provides Ethernet (W5500 SPI),
+LittleFS, serial UART and ArduinoJson/PubSubClient dependencies. Do not
+install a second Arduino ESP32 core on top of the existing one solely to
+try to fix a broken PlatformIO cache.
+
+References:
+- https://docs.arduino.cc/arduino-cli/sketch-specification/
+- https://docs.arduino.cc/arduino-cli/commands-reference/arduino-cli_compile
+- https://docs.arduino.cc/arduino-cli/commands-reference/arduino-cli_upload
+- https://docs.arduino.cc/arduino-cli/configuration
+- https://github.com/espressif/arduino-esp32/blob/3.3.7/platform.txt
