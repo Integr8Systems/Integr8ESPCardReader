@@ -24,6 +24,36 @@ uint64_t jsonU64(JsonVariantConst value) {
   for (char c : s) if (c < '0' || c > '9') return 0;
   return strtoull(s.c_str(), nullptr, 10);
 }
+// Accept server dates as UTC yyyy-MM-dd HH:mm:ss or epoch integer.
+// Always interpret the agreed wire format as UTC, independent of local timezone.
+bool parseUtcEpoch(JsonVariantConst value, uint32_t& result) {
+  if (value.is<uint32_t>()) { result = value.as<uint32_t>(); return true; }
+  String input = value.as<String>();
+  if (input.length() == 0) return false;
+  if (input.length() != 19) {
+    for (char c : input) if (c < '0' || c > '9') return false;
+    unsigned long long n = strtoull(input.c_str(), nullptr, 10);
+    if (n > UINT32_MAX) return false;
+    result = static_cast<uint32_t>(n); return true;
+  }
+  int year, month, day, hour, minute, second;
+  if (sscanf(input.c_str(), "%4d-%2d-%2d %2d:%2d:%2d",
+             &year, &month, &day, &hour, &minute, &second) != 6) return false;
+  if (year < 1970 || year > 2106 || month < 1 || month > 12 || day < 1 ||
+      day > 31 || hour > 23 || minute > 59 || second > 59) return false;
+  struct tm utc = {};
+  utc.tm_year = year - 1900; utc.tm_mon = month - 1; utc.tm_mday = day;
+  utc.tm_hour = hour; utc.tm_min = minute; utc.tm_sec = second;
+  time_t timestamp = timegm(&utc);
+  if (timestamp < 0 || static_cast<uint64_t>(timestamp) > UINT32_MAX) return false;
+  struct tm verified;
+  if (!gmtime_r(&timestamp, &verified) || verified.tm_year != utc.tm_year ||
+      verified.tm_mon != utc.tm_mon || verified.tm_mday != utc.tm_mday ||
+      verified.tm_hour != utc.tm_hour || verified.tm_min != utc.tm_min ||
+      verified.tm_sec != utc.tm_sec) return false;
+  result = static_cast<uint32_t>(timestamp);
+  return true;
+}
 bool validClock(uint32_t& epoch) {
   time_t now = time(nullptr);
   if (now < 1760000000LL || now > UINT32_MAX) return false;
@@ -49,14 +79,17 @@ void onMqtt(char* topic, uint8_t* payload, unsigned int length) {
   bool ok = false;
   if (!strcmp(command, "CardUpsert")) {
     uint64_t card = jsonU64(doc["CardNumber"]);
+    uint32_t fromEpoch = 0, toEpoch = 0;
+    bool datesOk = parseUtcEpoch(doc["ValidFrom"], fromEpoch) &&
+                   parseUtcEpoch(doc["ValidTo"], toEpoch);
     CardRecord r = {
-      doc["AssetID"].as<uint32_t>(), card, doc["ValidFromEpoch"].as<uint32_t>(),
-      doc["ValidToEpoch"].as<uint32_t>(),
+      doc["AssetID"].as<uint32_t>(), card, fromEpoch,
+      toEpoch,
       static_cast<uint8_t>((doc["Enabled"].as<bool>() ? FLAG_ENABLED : 0) |
         (doc["Suspended"].as<bool>() ? FLAG_SUSPENDED : 0) |
         (doc["Blacklisted"].as<bool>() ? FLAG_BLACKLISTED : 0)), 0
     };
-    ok = store.upsert(r);
+    ok = datesOk && store.upsert(r);
   } else if (!strcmp(command, "CardDelete")) {
     ok = store.remove(doc["AssetID"].as<uint32_t>());
   }
@@ -106,7 +139,9 @@ void sendOldest() {
   inFlight = r.sequence;
   JsonDocument doc;
   // String avoids loss of 64-bit precision in external JSON consumers.
-  doc["Sequence"] = String(static_cast<unsigned long long>(r.sequence));
+  char sequence[24];
+  snprintf(sequence, sizeof(sequence), "%llu", static_cast<unsigned long long>(r.sequence));
+  doc["Sequence"] = sequence;
   doc["AssetID"] = r.assetId;
   doc["Epoch"] = r.epoch;
   String payload; serializeJson(doc, payload);
