@@ -14,11 +14,11 @@ LILYGO T-ETH-Elite ESP32-S3 + W5500 Ethernet + UART TTL RFID reader.
 ## Build
 Install PlatformIO in VS Code, configure `include/config.h`, and build/upload the `t_eth_elite` environment. The UART reader uses GPIO39 RX and optional GPIO42 TX. See [wiring](docs/WIRING.md). Validate the exact board revision and core/library versions before connecting hardware.
 
-## MQTT development JSON (not yet Integr8 wire-compatible)
+## MQTT development JSON (not yet Integr8 wire-compatible; dates interpreted as UTC)
 - Subscribe: `integr8/<DEVICE_ID>/cards/receive`
 - Subscribe: `integr8/<DEVICE_ID>/transactions/acknowledge`
 - Publish: `integr8/<DEVICE_ID>/send`
-- Upsert card command: `{"Command":"CardUpsert","MessageID":"abc","AssetID":123,"CardNumber":"123456789","ValidFromEpoch":1761955200,"ValidToEpoch":2524607999,"Enabled":true,"Suspended":false,"Blacklisted":false}`
+- Upsert card command: `{"Command":"CardUpsert","MessageID":"abc","AssetID":123,"CardNumber":"123456789","ValidFrom":"2026-11-01 00:00:00","ValidTo":"2050-01-01 23:59:59","Enabled":true,"Suspended":false,"Blacklisted":false}`
 - Delete card: `{"Command":"CardDelete","MessageID":"abc","AssetID":123}`
 - Transaction: `{"Sequence":"1","AssetID":123,"Epoch":1793617200}`
 - Server ACK (only *after durable server-side transaction commit*): `{"Sequence":"1","Accepted":true}`
