@@ -2,8 +2,8 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$Port,
 
-    [string]$Cli = "arduino-cli",
-    [string]$BuildPath = ""
+    [string]$Cli = "D:\EspTools\arduino-cli.exe",
+    [string]$BuildPath = "D:\EspTools\Build\Integr8ESPCardReader"
 )
 
 $ErrorActionPreference = "Stop"

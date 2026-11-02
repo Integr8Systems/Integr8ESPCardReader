@@ -1,5 +1,5 @@
 param(
-    [string]$Cli = "arduino-cli"
+    [string]$Cli = "D:\EspTools\arduino-cli.exe"
 )
 
 $ErrorActionPreference = "Stop"
