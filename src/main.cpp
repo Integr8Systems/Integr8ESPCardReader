@@ -8,6 +8,8 @@
 #include "../include/storage.h"
 #include "../include/Integr8Wire.h"
 #include "../include/UtcEpoch.h"
+#include "../include/DeviceConfig.h"
+#include "../include/BleSetup.h"
 #include <string>
 
 // Encodes every outbound MQTT JSON payload and decodes every inbound payload
@@ -20,6 +22,9 @@ String topicIn, topicAck, topicOut;
 unsigned long lastConnect = 0, lastPublish = 0;
 String rfidBuffer;
 uint64_t inFlight = 0;
+Settings::Mqtt mqttSettings;
+bool mqttConfigured = false;
+uint32_t lastHeartbeat = 0;
 
 // PubSubClient is limited by its configured packet buffer. Keep a bounded input.
 constexpr size_t MAX_WIRE_MESSAGE = 2048;
@@ -107,12 +112,14 @@ void onMqtt(char* topic, uint8_t* payload, unsigned int length) {
   if (!publishJson(topicOut, response)) Serial.println("[MQTT] Card response publish failed");
 }
 void reconnect() {
-  if (mqtt.connected() || millis() - lastConnect < Config::MQTT_RETRY_MS) return;
+  if (!mqttConfigured || mqtt.connected() || millis() - lastConnect < Config::MQTT_RETRY_MS) return;
   lastConnect = millis();
-  if (mqtt.connect(Config::DEVICE_ID, Config::MQTT_USER, Config::MQTT_PASSWORD)) {
+  if (mqtt.connect(mqttSettings.deviceId.c_str(), mqttSettings.username.c_str(), mqttSettings.password.c_str())) {
     mqtt.subscribe(topicIn.c_str(), 1);
     mqtt.subscribe(topicAck.c_str(), 1);
     inFlight = 0; // Resend oldest pending after reconnect.
+    lastHeartbeat = millis();
+    Serial.printf("[MQTT] Connected: %s:%u as %s\n", mqttSettings.host.c_str(), mqttSettings.port, mqttSettings.deviceId.c_str());
   }
 }
 void queueCard(const String& raw) {
@@ -141,7 +148,7 @@ void pollRfid() {
   }
 }
 void sendOldest() {
-  if (!mqtt.connected() || millis() - lastPublish < Config::MQTT_RETRY_MS) return;
+  if (!mqtt.connected() || !store.pending() || millis() - lastPublish < Config::MQTT_RETRY_MS) return;
   TransactionRecord r;
   if (!store.oldest(r)) { inFlight = 0; return; }
   inFlight = r.sequence;
@@ -154,26 +161,73 @@ void sendOldest() {
   doc["Epoch"] = r.epoch;
   if (publishJson(topicOut, doc)) lastPublish = millis();
 }
+void sendHeartbeat() {
+  if (!mqtt.connected() || static_cast<uint32_t>(millis() - lastHeartbeat) < Config::HEARTBEAT_MS) return;
+  JsonDocument heartbeat;
+  heartbeat["Command"] = "Heartbeat";
+  heartbeat["DeviceID"] = mqttSettings.deviceId;
+  uint32_t epoch = 0;
+  validClock(epoch);
+  heartbeat["Epoch"] = epoch;  // 0 if NTP has not synchronised yet.
+  heartbeat["UptimeSeconds"] = millis() / 1000UL;
+  heartbeat["IPAddress"] = ETH.localIP().toString();
+  heartbeat["Cardholders"] = store.cards();
+  heartbeat["PendingTransactions"] = store.pending();
+  heartbeat["FreeHeapBytes"] = ESP.getFreeHeap();
+  if (publishJson(topicOut, heartbeat)) {
+    lastHeartbeat = millis();
+  }
+}
+
 void setup() {
   Serial.begin(115200);
+  pinMode(Config::BLE_SETUP_BUTTON_GPIO, INPUT_PULLUP);
   rfid.begin(Config::RFID_BAUD, SERIAL_8N1, Config::RFID_RX_GPIO, Config::RFID_TX_GPIO);
-  if (!store.begin()) { Serial.println("Storage unavailable, halt (no auto-format)"); while (true) delay(1000); }
-  Serial.printf("Storage: %lu cards / %lu pending transactions\n",
-    (unsigned long)store.cards(), (unsigned long)store.pending());
+
+  mqttConfigured = Settings::load(mqttSettings);
+  BleSetup::begin(!mqttConfigured);
+
+  if (!store.begin()) {
+    Serial.println("[Storage] Unavailable: no transactions will be recorded.");
+    Serial.println("[Storage] Set ALLOW_FIRST_BOOT_FORMAT only on a new blank board.");
+    while (true) {
+      BleSetup::poll();
+      delay(20);
+    }
+  }
+
+  Serial.printf("[Storage] Cards: %lu, pending transactions: %lu\n",
+                (unsigned long)store.cards(), (unsigned long)store.pending());
+  Serial.printf("[Hardware] Flash: %lu, PSRAM: %lu\n",
+                (unsigned long)ESP.getFlashChipSize(), (unsigned long)ESP.getPsramSize());
+
   SPI.begin(48, 47, 21, 45); // T-ETH Elite onboard W5500
-  ETH.begin(ETH_PHY_W5500, 1, 45, 14, -1, SPI);
-  topicIn = String("integr8/") + Config::DEVICE_ID + "/cards/receive";
-  topicAck = String("integr8/") + Config::DEVICE_ID + "/transactions/acknowledge";
-  topicOut = String("integr8/") + Config::DEVICE_ID + "/send";
-  mqtt.setServer(Config::MQTT_HOST, Config::MQTT_PORT);
+  if (!ETH.begin(ETH_PHY_W5500, 1, 45, 14, -1, SPI)) {
+    Serial.println("[Ethernet] W5500 initialisation failed");
+  }
+
+  if (mqttConfigured) {
+    topicIn = String("integr8/") + mqttSettings.deviceId + "/cards/receive";
+    topicAck = String("integr8/") + mqttSettings.deviceId + "/transactions/acknowledge";
+    topicOut = String("integr8/") + mqttSettings.deviceId + "/send";
+    mqtt.setServer(mqttSettings.host.c_str(), mqttSettings.port);
+    Serial.printf("[MQTT] Server: %s:%u, device: %s\n",
+                  mqttSettings.host.c_str(), mqttSettings.port, mqttSettings.deviceId.c_str());
+  } else {
+    Serial.println("[MQTT] Not configured. Pair over Bluetooth to enter site settings.");
+  }
+
   mqtt.setCallback(onMqtt);
   mqtt.setBufferSize(4096);
-  configTime(0, 0, "pool.ntp.org", "time.google.com"); // UTC epoch, network required
+  configTime(0, 0, "pool.ntp.org", "time.google.com"); // UTC epoch
 }
+
 void loop() {
+  BleSetup::poll();
   mqtt.loop();
   reconnect();
   pollRfid();
-  sendOldest();
+  sendOldest();     // Keep queued transactions ahead of diagnostics.
+  sendHeartbeat();  // Independent of transaction acknowledgements.
   delay(2);
 }

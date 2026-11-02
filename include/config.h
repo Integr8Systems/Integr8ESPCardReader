@@ -1,18 +1,25 @@
 #pragma once
-// Copy this file locally and provide values for your installation.
-// Do not commit real passwords. MQTT protocol adapter is intentionally isolated.
+#include <Arduino.h>
+
+// MQTT broker, device ID and credentials are now stored in ESP32 NVS and
+// provisioned over authenticated BLE. No per-site firmware builds required.
 namespace Config {
-constexpr char MQTT_HOST[] = "192.168.2.8";
-constexpr uint16_t MQTT_PORT = 1889;
-constexpr char MQTT_USER[] = "";
-constexpr char MQTT_PASSWORD[] = "";
-constexpr char DEVICE_ID[] = "reader-001";
+constexpr uint16_t DEFAULT_MQTT_PORT = 1889;
 constexpr uint32_t MQTT_RETRY_MS = 5000;
-// On a BRAND NEW board only: set true, flash once and let it initialise the
-// dedicated LittleFS partition. Then set false and upload again to prevent
-// accidental data loss after corruption/power failures.
+constexpr uint32_t HEARTBEAT_MS = 30000;
+
+// Hold the board BOOT button (GPIO0) for 4 seconds AFTER boot to enable
+// a 3 minute on-site setup window. Never reboot with BOOT held down.
+constexpr int BLE_SETUP_BUTTON_GPIO = 0;
+constexpr uint32_t BLE_SETUP_HOLD_MS = 4000;
+constexpr uint32_t BLE_SETUP_WINDOW_MS = 180000;
+constexpr uint32_t BLE_REBOOT_DELAY_MS = 6000;
+
+// BRAND-NEW FLASH ONLY: change to true for initial LittleFS format,
+// then restore false and reflash. Never enable for existing site devices.
 constexpr bool ALLOW_FIRST_BOOT_FORMAT = false;
-constexpr int RFID_RX_GPIO = 39; // ESP32 RX <- RFID TX, bare board; see docs/WIRING.md
-constexpr int RFID_TX_GPIO = 42; // ESP32 TX -> RFID RX if required
+
+constexpr int RFID_RX_GPIO = 39;
+constexpr int RFID_TX_GPIO = 42;
 constexpr uint32_t RFID_BAUD = 9600;
 }

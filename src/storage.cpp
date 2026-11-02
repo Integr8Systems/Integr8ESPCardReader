@@ -157,8 +157,10 @@ bool Store::append(uint32_t assetId, uint32_t epoch) {
   TransactionRecord old = {};
   if (!readTransaction(nextSlot, old)) return false;
   TransactionRecord r = {nextSequence, assetId, epoch, 1, 0};
+  // Never silently overwrite an unacknowledged access transaction.
+  // Stop accepting log writes when all 100,000 records remain pending.
+  if (validTransaction(old) && old.state == 1) return false;
   if (!writeTransaction(nextSlot, r)) return false;
-  if (validTransaction(old) && old.state == 1 && pendingCount) --pendingCount;
   ++pendingCount; ++nextSequence; nextSlot = (nextSlot + 1) % MAX_TRANSACTIONS;
   return true;
 }
